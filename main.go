@@ -9,25 +9,21 @@ import (
 )
 
 func main() {
-	// Загружаем переменные окружения из .env
-	err := godotenv.Load()
-	if err != nil {
-		log.Println("⚠️  Файл .env не найден, используем переменные окружения")
+	if err := godotenv.Load(); err != nil {
+		log.Printf("⚠️ Warning: %v", err)
 	}
 
-	// Подключение к БД
 	db, err := storage.NewPostgres()
 	if err != nil {
-		log.Fatalf("❌ Ошибка подключения к БД: %v", err)
+		log.Fatalf("❌ Database connection error: %v", err)
 	}
-	defer db.Pool.Close()
+	defer db.Pool.Close() // Упрощаем, так как Close() не возвращает ошибку
 
-	// Создание и запуск бота
 	telegramBot, err := bot.NewBot(db)
 	if err != nil {
-		log.Fatalf("❌ Ошибка создания бота: %v", err)
+		log.Fatalf("❌ Bot creation error: %v", err)
 	}
 
-	log.Println("🚀 Бот успешно запущен!")
+	log.Println("🚀 Bot started successfully")
 	telegramBot.Start()
 }

@@ -6,7 +6,7 @@ import (
 
 	"github.com/eugenepelipets/window-wash-bot/models"
 	"github.com/eugenepelipets/window-wash-bot/storage"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 type Bot struct {
@@ -38,14 +38,20 @@ func (b *Bot) Start() {
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 
-	updates, err := b.api.GetUpdatesChan(u)
-	if err != nil {
-		log.Fatalf("❌ Ошибка при получении обновлений: %v", err)
-	}
+	updates := b.api.GetUpdatesChan(u)
 
 	for update := range updates {
 		if update.Message != nil {
-			b.handleMessage(update.Message)
+			switch userState[update.Message.Chat.ID] {
+			case "waiting_for_floor":
+				b.validateFloor(update.Message)
+			case "waiting_for_apartment":
+				b.validateApartment(update.Message)
+			default:
+				b.handleMessage(update.Message)
+			}
+		} else if update.CallbackQuery != nil {
+			b.handleCallback(update.CallbackQuery)
 		}
 	}
 }
@@ -74,14 +80,21 @@ func (b *Bot) handleStart(msg *tgbotapi.Message) {
 		log.Printf("⚠️ Ошибка сохранения пользователя: %v", err)
 	}
 
-	b.sendMessage(msg.Chat.ID, "Привет! Я помогу тебе записаться на мытье окон. Нажми кнопку ниже 👇")
+	// Отправляем приветственное сообщение с кнопкой
+	replyMarkup := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Новый заказ", "new_order"),
+		),
+	)
+	b.sendMessage(msg.Chat.ID, "Привет! Я помогу тебе записаться на мытье окон. Нажми кнопку ниже 👇", replyMarkup)
 }
 
-// Отправка сообщений
-func (b *Bot) sendMessage(chatID int64, text string) {
+func (b *Bot) sendMessage(chatID int64, text string, replyMarkup ...tgbotapi.InlineKeyboardMarkup) {
 	msg := tgbotapi.NewMessage(chatID, text)
-	_, err := b.api.Send(msg)
-	if err != nil {
+	if len(replyMarkup) > 0 {
+		msg.ReplyMarkup = replyMarkup[0]
+	}
+	if _, err := b.api.Send(msg); err != nil {
 		log.Printf("⚠️ Ошибка отправки сообщения: %v", err)
 	}
 }

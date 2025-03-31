@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"time"
@@ -53,6 +54,44 @@ func (p *Postgres) SaveUser(user models.User) error {
 	_, err := p.Pool.Exec(ctx, query, user.TelegramID, user.UserName, user.FirstName, user.LastName, time.Now())
 	if err != nil {
 		log.Printf("⚠️ Ошибка при сохранении пользователя: %v", err)
+		return err
+	}
+
+	return nil
+}
+
+// Сохранение заказа
+func (p *Postgres) SaveOrder(order models.Order) error {
+	// Проверяем существование пользователя
+	var exists bool
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := p.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE telegram_id = $1)", order.UserID).Scan(&exists)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return errors.New("user does not exist")
+	}
+
+	query := `
+		INSERT INTO orders (user_id, window_type, floor, apartment, price, status, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`
+
+	_, err = p.Pool.Exec(ctx, query,
+		order.UserID,
+		order.WindowType,
+		order.Floor,
+		order.Apartment,
+		order.Price,
+		order.Status,
+		time.Now(),
+	)
+
+	if err != nil {
+		log.Printf("⚠️ Ошибка при сохранении заказа: %v", err)
 		return err
 	}
 
