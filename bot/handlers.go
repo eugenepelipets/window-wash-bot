@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"github.com/eugenepelipets/window-wash-bot/models"
 	"log"
 	"strconv"
 
@@ -14,6 +15,7 @@ const (
 )
 
 var userState = make(map[int64]string)
+var userOrders = make(map[int64]models.Order)
 
 // Обработка callback-запросов от кнопок
 func (b *Bot) handleCallback(callback *tgbotapi.CallbackQuery) {
@@ -47,16 +49,38 @@ func (b *Bot) handleNewOrder(chatID int64) {
 
 // Обработка выбора типа окон
 func (b *Bot) handleWindowSelection(chatID int64, windowType string) {
-	// Здесь можно сохранить выбор пользователя
 	userState[chatID] = "waiting_for_floor"
+	// Сохраняем тип окон во временную структуру
+	userOrders[chatID] = models.Order{
+		UserID:     chatID,
+		WindowType: windowType,
+	}
 	b.sendMessage(chatID, "Введите этаж (только цифры):")
 }
 
 // Подтверждение заказа
 func (b *Bot) handleConfirmOrder(chatID int64) {
-	// Здесь будет логика подтверждения заказа
-	b.sendMessage(chatID, "Ваш заказ подтвержден! Ожидайте мастера.")
+	// Получаем сохраненные данные
+	order := userOrders[chatID]
+
+	// Рассчитываем цену
+	price, _ := CalculatePrice(order.WindowType, order.Floor)
+	order.Price = price
+	order.Status = "confirmed"
+
+	// Сохраняем в БД
+	err := b.db.SaveOrder(order)
+	if err != nil {
+		log.Printf("⚠️ Ошибка сохранения заказа: %v", err)
+		b.sendMessage(chatID, "Произошла ошибка при сохранении заказа. Попробуйте позже.")
+		return
+	}
+
+	// Удаляем временные данные
+	delete(userOrders, chatID)
 	delete(userState, chatID)
+
+	b.sendMessage(chatID, "Ваш заказ подтвержден! Ожидайте мастера.")
 }
 
 // Валидация этажа
@@ -66,6 +90,10 @@ func (b *Bot) validateFloor(msg *tgbotapi.Message) {
 		b.sendMessage(msg.Chat.ID, "Некорректный этаж. Введите цифру от 1 до 100:")
 		return
 	}
+
+	order := userOrders[msg.Chat.ID]
+	order.Floor = floor
+	userOrders[msg.Chat.ID] = order
 
 	userState[msg.Chat.ID] = "waiting_for_apartment"
 	b.sendMessage(msg.Chat.ID, "Введите номер квартиры:")
@@ -78,7 +106,11 @@ func (b *Bot) validateApartment(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Здесь можно сохранить данные и перейти к подтверждению
+	// Обновляем заказ
+	order := userOrders[msg.Chat.ID]
+	order.Apartment = msg.Text
+	userOrders[msg.Chat.ID] = order
+
 	userState[msg.Chat.ID] = ""
 	b.sendConfirmation(msg.Chat.ID)
 }
