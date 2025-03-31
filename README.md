@@ -1,1 +1,0 @@
-# window-wash-bot
