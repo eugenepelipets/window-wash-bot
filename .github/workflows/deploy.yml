@@ -22,26 +22,38 @@ jobs:
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Install and configure PostgreSQL
+      - name: Configure PostgreSQL
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          # Установка PostgreSQL (используем sudo с паролем из секретов)
-          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S apt-get update
-          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S apt-get install -y postgresql postgresql-contrib
+          # Проверяем, установлен ли PostgreSQL
+          if ! command -v psql &> /dev/null; then
+            echo "Установка PostgreSQL..."
+            sudo apt-get update
+            sudo apt-get install -y postgresql postgresql-contrib
+          fi
 
-          # Создание пользователя и базы данных
-          sudo -u postgres psql -c "CREATE USER windowwash WITH PASSWORD '${{ secrets.DB_PASSWORD }}';"
-          sudo -u postgres psql -c "CREATE DATABASE windowwash OWNER windowwash;"
+          # Создаем пользователя и БД (запускаем от postgres)
+          sudo -u postgres psql -c "CREATE USER windowwash WITH PASSWORD '${{ secrets.DB_PASSWORD }}';" || true
+          sudo -u postgres psql -c "CREATE DATABASE windowwash OWNER windowwash;" || true
 
-          # Настройка аутентификации
-          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S tee -a /etc/postgresql/*/main/pg_hba.conf <<< "host    windowwash    windowwash    127.0.0.1/32    md5"
-          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S tee -a /etc/postgresql/*/main/pg_hba.conf <<< "local   windowwash    windowwash                      md5"
+          # Настраиваем аутентификацию
+          echo "Настройка pg_hba.conf..."
+          sudo bash -c 'echo "host    windowwash    windowwash    127.0.0.1/32    md5" >> /etc/postgresql/*/main/pg_hba.conf'
+          sudo bash -c 'echo "local   windowwash    windowwash                   md5" >> /etc/postgresql/*/main/pg_hba.conf'
           
-          # Перезапуск PostgreSQL
-          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S systemctl restart postgresql
+          # Перезапускаем PostgreSQL
+          sudo systemctl restart postgresql
 
-          # Проверка подключения
+          # Проверяем подключение
           PGPASSWORD='${{ secrets.DB_PASSWORD }}' psql -U windowwash -d windowwash -h 127.0.0.1 -c "SELECT 1" || exit 1
+          EOF
+
+      - name: Apply database schema
+        run: |
+          scp schema.sql deploy@${{ secrets.SSH_HOST }}:/tmp/schema.sql
+          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
+          PGPASSWORD='${{ secrets.DB_PASSWORD }}' psql -U windowwash -d windowwash -h 127.0.0.1 -f /tmp/schema.sql
+          rm /tmp/schema.sql
           EOF
 
   deploy:
@@ -62,13 +74,13 @@ jobs:
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Install Go on server
+      - name: Install Go
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
           if ! command -v go &> /dev/null; then
-            echo "Installing Go..."
-            echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S wget https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
-            echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
+            echo "Установка Go..."
+            wget https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
+            sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
             rm go1.24.0.linux-amd64.tar.gz
             echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
             source ~/.bashrc
@@ -85,22 +97,21 @@ jobs:
           git remote add origin https://github.com/${{ github.repository }}.git
           git fetch --depth 1 origin main
           git reset --hard FETCH_HEAD
-          chown -R deploy:deploy /var/www/window-wash-bot
 
-          # Создание .env файла
+          # Создаем .env файл
           cat > .env << "ENV_EOF"
           DATABASE_URL=postgres://windowwash:${{ secrets.DB_PASSWORD }}@localhost:5432/windowwash?sslmode=disable
           TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
           ENV_EOF
           chmod 600 .env
 
-          # Установка зависимостей и сборка
+          # Собираем приложение
           export PATH=$PATH:/usr/local/go/bin
           go mod tidy
           go build -o telebot .
 
-          # Настройка systemd сервиса
-          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S tee /etc/systemd/system/window-wash-bot.service > /dev/null << "SERVICE_EOF"
+          # Настраиваем systemd сервис
+          sudo bash -c 'cat > /etc/systemd/system/window-wash-bot.service << "SERVICE_EOF"
           [Unit]
           Description=Window Wash Telegram Bot
           After=network.target postgresql.service
@@ -116,11 +127,11 @@ jobs:
           
           [Install]
           WantedBy=multi-user.target
-          SERVICE_EOF
+          SERVICE_EOF'
 
-          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S systemctl daemon-reload
-          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S systemctl enable window-wash-bot
-          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S systemctl restart window-wash-bot
+          sudo systemctl daemon-reload
+          sudo systemctl enable window-wash-bot
+          sudo systemctl restart window-wash-bot
           EOF
 
       - name: Verify deployment
@@ -131,5 +142,5 @@ jobs:
             journalctl -u window-wash-bot -n 50 --no-pager
             exit 1
           fi
-          echo "Service is running successfully"
+          echo "✅ Сервис успешно запущен"
           EOF
