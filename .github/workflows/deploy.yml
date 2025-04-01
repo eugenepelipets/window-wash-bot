@@ -11,15 +11,25 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install SSH key
-        uses: shimataro/ssh-key-action@v2
+      - name: Add SSH key
+        uses: webfactory/ssh-agent@v0.7.0
         with:
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          known_hosts: ${{ secrets.KNOWN_HOSTS }}
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add server to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
+
+      - name: Clone repo
+        run: |
+          ssh deploy@${{ secrets.SSH_HOST }} "
+            [ -d /var/www/window-wash-bot ] || git clone https://github.com/ваш-репозиторий.git /var/www/window-wash-bot
+          "
 
       - name: Deploy
         run: |
-          ssh -i ~/.ssh/github_actions deploy@${{ secrets.SSH_HOST }} "
+          ssh deploy@${{ secrets.SSH_HOST }} "
             cd /var/www/window-wash-bot
             git pull origin main
             /usr/local/go/bin/go build -o telebot main.go
