@@ -26,12 +26,20 @@ jobs:
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
           # Обновление системы
+          # Настройка автоматического разрешения конфликтов
           echo 'Dpkg::Options {
           "--force-confdef";
           "--force-confold";
           }' | sudo tee /etc/apt/apt.conf.d/local
-          
-          sudo apt update && sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade -y
+
+          # Явно запрещаем major-апгрейд
+          sudo sed -i 's/Prompt=lts/Prompt=never/' /etc/update-manager/release-upgrades
+  
+          # Обновление только security-пакетов (без предложения апгрейда ОС)
+          sudo apt update && sudo DEBIAN_FRONTEND=noninteractive apt-get -y \
+          -o Dpkg::Options::="--force-confdef" \
+          -o Dpkg::Options::="--force-confold" \
+          --only-upgrade install $(apt list --upgradable 2>/dev/null | grep -v Listing | grep security | cut -d/ -f1)
 
           # Установка базовых зависимостей
           sudo apt install -y build-essential gcc
