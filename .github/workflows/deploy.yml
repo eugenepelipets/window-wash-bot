@@ -27,8 +27,8 @@ jobs:
           ssh deploy@${{ secrets.SSH_HOST }} "
             sudo apt-get update
             sudo apt-get install -y postgresql postgresql-contrib
-            sudo -u postgres psql -c \"CREATE USER windowwash WITH PASSWORD '${{ secrets.DB_PASSWORD }}';\"
-            sudo -u postgres psql -c \"CREATE DATABASE windowwash OWNER windowwash;\"
+            sudo -u postgres psql -c \"CREATE USER postgres WITH PASSWORD '${{ secrets.DB_PASSWORD }}';\"
+            sudo -u postgres psql -c \"CREATE DATABASE postgres OWNER postgres;\"
             sudo -u postgres psql -d windowwash -c \"
               $(cat << 'EOF'
               CREATE TABLE IF NOT EXISTS users (
