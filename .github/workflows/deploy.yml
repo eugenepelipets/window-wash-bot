@@ -25,31 +25,23 @@ jobs:
       - name: Install and configure PostgreSQL
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          # Установка PostgreSQL
-          sudo apt-get update
-          sudo apt-get install -y postgresql postgresql-contrib
+          # Установка PostgreSQL (используем sudo с паролем из секретов)
+          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S apt-get update
+          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S apt-get install -y postgresql postgresql-contrib
 
           # Создание пользователя и базы данных
           sudo -u postgres psql -c "CREATE USER windowwash WITH PASSWORD '${{ secrets.DB_PASSWORD }}';"
           sudo -u postgres psql -c "CREATE DATABASE windowwash OWNER windowwash;"
 
           # Настройка аутентификации
-          echo "host    windowwash    windowwash    127.0.0.1/32    md5" | sudo tee -a /etc/postgresql/*/main/pg_hba.conf
-          echo "local   windowwash    windowwash                      md5" | sudo tee -a /etc/postgresql/*/main/pg_hba.conf
+          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S tee -a /etc/postgresql/*/main/pg_hba.conf <<< "host    windowwash    windowwash    127.0.0.1/32    md5"
+          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S tee -a /etc/postgresql/*/main/pg_hba.conf <<< "local   windowwash    windowwash                      md5"
           
-          # Перезапуск PostgreSQL для применения изменений
-          sudo systemctl restart postgresql
+          # Перезапуск PostgreSQL
+          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S systemctl restart postgresql
 
           # Проверка подключения
           PGPASSWORD='${{ secrets.DB_PASSWORD }}' psql -U windowwash -d windowwash -h 127.0.0.1 -c "SELECT 1" || exit 1
-          EOF
-
-      - name: Apply database schema
-        run: |
-          scp schema.sql deploy@${{ secrets.SSH_HOST }}:/tmp/schema.sql
-          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          PGPASSWORD='${{ secrets.DB_PASSWORD }}' psql -U windowwash -d windowwash -h 127.0.0.1 -f /tmp/schema.sql
-          rm /tmp/schema.sql
           EOF
 
   deploy:
@@ -75,8 +67,8 @@ jobs:
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
           if ! command -v go &> /dev/null; then
             echo "Installing Go..."
-            wget https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
-            sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
+            echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S wget https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
+            echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
             rm go1.24.0.linux-amd64.tar.gz
             echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
             source ~/.bashrc
@@ -108,7 +100,7 @@ jobs:
           go build -o telebot .
 
           # Настройка systemd сервиса
-          sudo bash -c 'cat > /etc/systemd/system/window-wash-bot.service << "SERVICE_EOF"
+          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S tee /etc/systemd/system/window-wash-bot.service > /dev/null << "SERVICE_EOF"
           [Unit]
           Description=Window Wash Telegram Bot
           After=network.target postgresql.service
@@ -124,17 +116,17 @@ jobs:
           
           [Install]
           WantedBy=multi-user.target
-          SERVICE_EOF'
+          SERVICE_EOF
 
-          sudo systemctl daemon-reload
-          sudo systemctl enable window-wash-bot
-          sudo systemctl restart window-wash-bot
+          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S systemctl daemon-reload
+          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S systemctl enable window-wash-bot
+          echo '${{ secrets.SUDO_PASSWORD }}' | sudo -S systemctl restart window-wash-bot
           EOF
 
       - name: Verify deployment
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          sleep 5  # Даем сервису время запуститься
+          sleep 5
           if ! systemctl is-active window-wash-bot; then
             journalctl -u window-wash-bot -n 50 --no-pager
             exit 1
