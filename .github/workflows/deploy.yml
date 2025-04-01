@@ -1,8 +1,8 @@
-name: Deploy to Ubuntu Server
+name: Deploy to Production
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
 
 jobs:
   deploy:
@@ -11,27 +11,35 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Add SSH key
+      - name: Setup SSH
         uses: webfactory/ssh-agent@v0.7.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Add server to known hosts
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
-
-      - name: Clone repo
+      - name: Prepare server directory
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} "
-            [ -d /var/www/window-wash-bot ] || git clone https://github.com/ваш-репозиторий.git /var/www/window-wash-bot
+            rm -rf /var/www/window-wash-bot/*
+            git clone --depth 1 https://github.com/${{ github.repository }}.git /var/www/window-wash-bot
+            chown -R deploy:deploy /var/www/window-wash-bot
           "
 
-      - name: Deploy
+      - name: Build and deploy
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} "
             cd /var/www/window-wash-bot
-            git pull origin main
-            /usr/local/go/bin/go build -o telebot main.go
+            /usr/local/go/bin/go mod tidy
+            if ! /usr/local/go/bin/go build -o telebot .; then
+              echo 'Build failed!'
+              exit 1
+            fi
             sudo systemctl restart window-wash-bot
+          "
+
+      - name: Verify deployment
+        run: |
+          ssh deploy@${{ secrets.SSH_HOST }} "
+            systemctl is-active window-wash-bot && 
+            echo 'Service is running' || 
+            (echo 'Service failed!'; journalctl -u window-wash-bot -n 20; exit 1)
           "
