@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/eugenepelipets/window-wash-bot/bot"
 	"github.com/eugenepelipets/window-wash-bot/storage"
@@ -9,6 +10,9 @@ import (
 )
 
 func main() {
+	log.SetOutput(os.Stdout)
+	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
+
 	if err := godotenv.Load(); err != nil {
 		log.Printf("⚠️ Warning: %v", err)
 	}
@@ -17,7 +21,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("❌ Database connection error: %v", err)
 	}
-	defer db.Pool.Close() // Упрощаем, так как Close() не возвращает ошибку
+	defer db.Pool.Close()
 
 	telegramBot, err := bot.NewBot(db)
 	if err != nil {
