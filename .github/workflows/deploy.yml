@@ -29,9 +29,11 @@ jobs:
 
       - name: Basic server setup
         run: |
-          ssh root@${{ secrets.SSH_HOST }} << 'EOF'
+          ssh root@${{ secrets.SSH_HOST }} "bash -s" << EOF
           #!/bin/bash
           set -e
+          APP_DIR="${{ env.APP_DIR }}"
+          SWAP_SIZE="${{ env.SWAP_SIZE }}"
 
           # 1. Создание пользователя deploy
           if ! id -u deploy >/dev/null 2>&1; then
@@ -47,10 +49,6 @@ jobs:
           
             echo "deploy ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/deploy
             chmod 440 /etc/sudoers.d/deploy
-          
-            # НЕ отключаем root-доступ (закомментируйте эту строку):
-            # sed -i 's/^PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
-            systemctl restart ssh
           fi
 
           # 2. Обновление системы
@@ -61,22 +59,27 @@ jobs:
           # 3. Установка базовых зависимостей
           apt-get install -y build-essential git curl ufw
 
-          # 4. Настройка swap
+          # 4. Настройка swap (исправленная версия)
           if [ ! -f /swapfile ]; then
-            fallocate -l $SWAP_SIZE /swapfile && echo "Swap file создан" || dd if=/dev/zero of=/swapfile bs=1M count=1024
+            if ! fallocate -l \$SWAP_SIZE /swapfile 2>/dev/null; then
+              echo "Используем dd для создания swap..."
+              dd if=/dev/zero of=/swapfile bs=1M count=\$((\${SWAP_SIZE//[!0-9]/}*1024))
+            fi
             chmod 600 /swapfile
             mkswap /swapfile
             swapon /swapfile
             echo '/swapfile none swap sw 0 0' >> /etc/fstab
+            echo "Swap file создан"
           fi
 
           # 5. Настройка firewall
           ufw allow OpenSSH
           ufw --force enable
 
-          # 6. Создание директории приложения
-          mkdir -p $APP_DIR
-          chown deploy:deploy $APP_DIR
+          # 6. Создание директории приложения (исправлено)
+          mkdir -p "\$APP_DIR"
+          chown deploy:deploy "\$APP_DIR"
+          echo "Директория приложения создана: \$APP_DIR"
           EOF
 
   setup-database:
