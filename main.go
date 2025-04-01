@@ -30,4 +30,5 @@ func main() {
 
 	log.Println("🚀 Bot started successfully")
 	telegramBot.Start()
+	//test
 }
