@@ -24,7 +24,30 @@ jobs:
 
       - name: Basic server setup
         run: |
-          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
+          ssh root@${{ secrets.SSH_HOST }} << 'EOF'
+          # Создаем пользователя deploy (если ещё не существует)
+          if ! id -u deploy >/dev/null 2>&1; then
+            echo "Создание пользователя deploy..."
+            sudo adduser --disabled-password --gecos "" deploy
+            sudo usermod -aG sudo deploy
+          
+            # Настраиваем SSH-директорию
+            sudo mkdir -p /home/deploy/.ssh
+            sudo touch /home/deploy/.ssh/authorized_keys
+            sudo chown -R deploy:deploy /home/deploy/.ssh
+            sudo chmod 700 /home/deploy/.ssh
+            sudo chmod 600 /home/deploy/.ssh/authorized_keys
+          
+            # Копируем публичный ключ из secrets
+            echo "${{ secrets.DEPLOY_PUBLIC_KEY }}" | sudo tee /home/deploy/.ssh/authorized_keys
+          
+            # Настраиваем sudo без пароля
+            echo "deploy ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/deploy
+            sudo chmod 440 /etc/sudoers.d/deploy
+          else
+            echo "Пользователь deploy уже существует"
+          fi
+
           # Обновление системы
           # Настройка автоматического разрешения конфликтов
           echo 'Dpkg::Options {
@@ -34,11 +57,11 @@ jobs:
 
           # Явно запрещаем major-апгрейд
           sudo sed -i 's/Prompt=lts/Prompt=never/' /etc/update-manager/release-upgrades
-  
+          
           # Обновление только security-пакетов (без предложения апгрейда ОС)
           sudo apt update && sudo DEBIAN_FRONTEND=noninteractive apt-get -y \
           -o Dpkg::Options::="--force-confdef" \
-          -o Dpkg::Options::="--force-confold" \
+          -o Dpkg::Options::="----force-confold" \
           --only-upgrade install $(apt list --upgradable 2>/dev/null | grep -v Listing | grep security | cut -d/ -f1)
 
           # Установка базовых зависимостей
@@ -55,21 +78,6 @@ jobs:
           else
             echo "Swap file уже существует"
           fi
-
-          # Настройка прав для пользователя deploy
-          echo "Настройка sudo прав для пользователя deploy..."
-          if [ ! -f /etc/sudoers.d/deploy ]; then
-            echo "deploy ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/deploy
-            sudo chmod 440 /etc/sudoers.d/deploy
-            echo "Права для deploy настроены"
-          else
-            echo "Права для deploy уже настроены"
-          fi
-
-          # Настройка пользователя PostgreSQL
-          echo "Настройка пользователя БД..."
-          sudo -u postgres createuser --superuser windowwash || true
-          sudo -u postgres psql -c "ALTER USER windowwash WITH PASSWORD '${{ secrets.DB_PASSWORD }}';" || true
           EOF
 
   setup-database:
