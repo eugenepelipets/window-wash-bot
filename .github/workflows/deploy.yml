@@ -142,9 +142,34 @@ jobs:
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Install Go
+      - name: Install prerequisites
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
+          # Установка необходимых пакетов
+          sudo apt update
+          sudo apt install -y git
+
+          # Создание директории с правильными правами
+          sudo mkdir -p /var/www/window-wash-bot
+          sudo chown -R deploy:deploy /var/www/window-wash-bot
+          EOF
+
+      - name: Deploy application
+        run: |
+          # Копируем код на сервер
+          rsync -avz --delete --exclude='.git' ./ deploy@${{ secrets.SSH_HOST }}:/var/www/window-wash-bot/
+
+          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
+          cd /var/www/window-wash-bot
+
+          # Создаем .env файл
+          cat > .env << "ENV_EOF"
+          DATABASE_URL=postgres://windowwash:${{ secrets.DB_PASSWORD }}@localhost:5432/windowwash?sslmode=disable
+          TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
+          ENV_EOF
+          chmod 600 .env
+
+          # Устанавливаем Go (если ещё не установлен)
           if ! command -v go &> /dev/null; then
             echo "Установка Go..."
             wget https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
@@ -154,28 +179,11 @@ jobs:
             echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
             source ~/.bashrc
           fi
-          EOF
 
-      - name: Deploy application
-        run: |
-          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          # Подготовка директории
-          mkdir -p /var/www/window-wash-bot
-          cd /var/www/window-wash-bot
-          git init
-          git remote add origin https://github.com/${{ github.repository }}.git
-          git fetch --depth 1 origin main
-          git reset --hard FETCH_HEAD
-
-          # Создаем .env файл
-          cat > .env << "ENV_EOF"
-          DATABASE_URL=postgres://windowwash:${{ secrets.DB_PASSWORD }}@localhost:5432/windowwash?sslmode=disable
-          TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
-          ENV_EOF
-          chmod 600 .env
+          # Добавляем Go в PATH для текущей сессии
+          export PATH=$PATH:/usr/local/go/bin
 
           # Собираем приложение
-          export PATH=$PATH:/usr/local/go/bin
           go mod tidy
           go build -o telebot .
 
@@ -184,7 +192,7 @@ jobs:
           [Unit]
           Description=Window Wash Telegram Bot
           After=network.target postgresql.service
-          
+
           [Service]
           User=deploy
           Group=deploy
@@ -193,7 +201,7 @@ jobs:
           ExecStart=/var/www/window-wash-bot/telebot
           Restart=always
           RestartSec=5
-          
+
           [Install]
           WantedBy=multi-user.target
           SERVICE_EOF'
@@ -207,7 +215,7 @@ jobs:
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
           sleep 5
-          if ! systemctl is-active window-wash-bot; then
+          if ! systemctl is-active --quiet window-wash-bot; then
             journalctl -u window-wash-bot -n 50 --no-pager
             exit 1
           fi
