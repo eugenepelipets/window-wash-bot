@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 jobs:
-  deploy:
+  setup-database:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -22,66 +22,121 @@ jobs:
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Setup PostgreSQL
+      - name: Install PostgreSQL and setup database
         run: |
-          ssh deploy@${{ secrets.SSH_HOST }} "
-            sudo apt-get update
-            sudo apt-get install -y postgresql postgresql-contrib
-            sudo -u postgres psql -c \"CREATE USER postgres WITH PASSWORD '${{ secrets.DB_PASSWORD }}';\"
-            sudo -u postgres psql -c \"CREATE DATABASE postgres OWNER postgres;\"
-            sudo -u postgres psql -d windowwash -c \"
-              $(cat << 'EOF'
-              CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                telegram_id BIGINT NOT NULL UNIQUE,
-                username VARCHAR(100) NOT NULL,
-                first_name VARCHAR(100) NOT NULL,
-                last_name VARCHAR(100) NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-              );
+          scp schema.sql deploy@${{ secrets.SSH_HOST }}:/tmp/schema.sql
           
-              CREATE TABLE IF NOT EXISTS orders (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                window_type VARCHAR(20) NOT NULL,
-                floor INTEGER NOT NULL,
-                apartment VARCHAR(10) NOT NULL,
-                price INTEGER NOT NULL,
-                status VARCHAR(20) DEFAULT 'pending',
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                FOREIGN KEY (user_id) REFERENCES users (telegram_id)
-              );
+          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
+          # Установка PostgreSQL
+          sudo apt-get update
+          sudo apt-get install -y postgresql postgresql-contrib
           
-              CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
-              CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
-              EOF
-              )
-            \"
-          "
+          # Создание пользователя и базы данных
+          sudo -u postgres psql -c "CREATE USER windowwash WITH PASSWORD '${{ secrets.DB_PASSWORD }}';"
+          sudo -u postgres psql -c "CREATE DATABASE windowwash OWNER windowwash;"
+          
+          # Применение схемы
+          sudo -u postgres psql -d windowwash -f /tmp/schema.sql
+          
+          # Настройка доступа
+          echo "host    windowwash    windowwash    127.0.0.1/32    md5" | sudo tee -a /etc/postgresql/*/main/pg_hba.conf
+          sudo systemctl restart postgresql
+          
+          # Очистка
+          rm /tmp/schema.sql
+          EOF
+
+  deploy:
+    needs: setup-database
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.7.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add server to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Install Go on server if needed
+        run: |
+          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
+          if ! command -v go &> /dev/null; then
+            echo "Installing Go..."
+            wget https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
+            sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
+            rm go1.24.0.linux-amd64.tar.gz
+            echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+            source ~/.bashrc
+          else
+            echo "Go is already installed"
+          fi
+          EOF
 
       - name: Prepare server directory
         run: |
-          ssh deploy@${{ secrets.SSH_HOST }} "
-            rm -rf /var/www/window-wash-bot/*
-            git clone --depth 1 https://github.com/${{ github.repository }}.git /var/www/window-wash-bot
-            chown -R deploy:deploy /var/www/window-wash-bot
-          "
+          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
+          mkdir -p /var/www/window-wash-bot
+          cd /var/www/window-wash-bot
+          git init
+          git remote add origin https://github.com/${{ github.repository }}.git
+          git fetch --depth 1 origin main
+          git reset --hard FETCH_HEAD
+          chown -R deploy:deploy /var/www/window-wash-bot
+          EOF
 
       - name: Build and deploy
         run: |
-          ssh deploy@${{ secrets.SSH_HOST }} "
-            cd /var/www/window-wash-bot
-            echo 'DATABASE_URL=postgres://windowwash:${{ secrets.DB_PASSWORD }}@localhost:5432/windowwash' > .env
-            echo 'TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}' >> .env
-            chmod 600 .env
-            /usr/local/go/bin/go mod tidy
-            /usr/local/go/bin/go build -o telebot .
-            sudo systemctl restart window-wash-bot
-          "
+          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
+          cd /var/www/window-wash-bot
+          
+          # Создаем .env файл
+          cat > .env << 'ENV_EOF'
+          DATABASE_URL=postgres://windowwash:${{ secrets.DB_PASSWORD }}@localhost:5432/windowwash
+          TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
+          ENV_EOF
+          
+          chmod 600 .env
+          
+          # Устанавливаем зависимости и собираем проект
+          export PATH=$PATH:/usr/local/go/bin
+          go mod tidy
+          go build -o telebot .
+          
+          # Настройка systemd service
+          sudo bash -c 'cat > /etc/systemd/system/window-wash-bot.service << "SERVICE_EOF"
+          [Unit]
+          Description=Window Wash Telegram Bot
+          After=network.target postgresql.service
+          
+          [Service]
+          User=deploy
+          Group=deploy
+          WorkingDirectory=/var/www/window-wash-bot
+          ExecStart=/var/www/window-wash-bot/telebot
+          Restart=always
+          
+          [Install]
+          WantedBy=multi-user.target
+          SERVICE_EOF'
+          
+          sudo systemctl daemon-reload
+          sudo systemctl enable window-wash-bot
+          sudo systemctl restart window-wash-bot
+          EOF
 
       - name: Verify deployment
         run: |
-          ssh deploy@${{ secrets.SSH_HOST }} "
-            systemctl is-active window-wash-bot || 
-            (journalctl -u window-wash-bot -n 20; exit 1)
-          "
+          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
+          if ! systemctl is-active window-wash-bot; then
+            journalctl -u window-wash-bot -n 20
+            exit 1
+          fi
+          echo "Service is running successfully"
+          EOF
