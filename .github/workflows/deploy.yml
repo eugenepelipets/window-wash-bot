@@ -27,10 +27,10 @@ jobs:
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
           # Обновление системы
           sudo apt update && sudo apt upgrade -y
-          
+
           # Установка базовых зависимостей
           sudo apt install -y build-essential gcc
-          
+
           # Настройка swap
           if [ ! -f /swapfile ]; then
             sudo fallocate -l 1G /swapfile
@@ -42,6 +42,21 @@ jobs:
           else
             echo "Swap file уже существует"
           fi
+
+          # Настройка прав для пользователя deploy
+          echo "Настройка sudo прав для пользователя deploy..."
+          if [ ! -f /etc/sudoers.d/deploy ]; then
+            echo "deploy ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/deploy
+            sudo chmod 440 /etc/sudoers.d/deploy
+            echo "Права для deploy настроены"
+          else
+            echo "Права для deploy уже настроены"
+          fi
+
+          # Настройка пользователя PostgreSQL
+          echo "Настройка пользователя БД..."
+          sudo -u postgres createuser --superuser windowwash || true
+          sudo -u postgres psql -c "ALTER USER windowwash WITH PASSWORD '${{ secrets.DB_PASSWORD }}';" || true
           EOF
 
   setup-database:
