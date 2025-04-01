@@ -16,9 +16,15 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
+      - name: Add server to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
       - name: Prepare server directory
         run: |
-          ssh deploy@${{ secrets.SSH_HOST }} "
+          ssh -o StrictHostKeyChecking=yes deploy@${{ secrets.SSH_HOST }} "
             rm -rf /var/www/window-wash-bot/*
             git clone --depth 1 https://github.com/${{ github.repository }}.git /var/www/window-wash-bot
             chown -R deploy:deploy /var/www/window-wash-bot
@@ -29,17 +35,13 @@ jobs:
           ssh deploy@${{ secrets.SSH_HOST }} "
             cd /var/www/window-wash-bot
             /usr/local/go/bin/go mod tidy
-            if ! /usr/local/go/bin/go build -o telebot .; then
-              echo 'Build failed!'
-              exit 1
-            fi
+            /usr/local/go/bin/go build -o telebot .
             sudo systemctl restart window-wash-bot
           "
 
       - name: Verify deployment
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} "
-            systemctl is-active window-wash-bot && 
-            echo 'Service is running' || 
-            (echo 'Service failed!'; journalctl -u window-wash-bot -n 20; exit 1)
+            systemctl is-active window-wash-bot || 
+            (journalctl -u window-wash-bot -n 20; exit 1)
           "
