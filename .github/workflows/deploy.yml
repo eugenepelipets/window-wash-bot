@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
 
+env:
+  APP_DIR: /var/www/window-wash-bot
+  GO_VERSION: 1.24.0
+  SWAP_SIZE: 1G
+
 jobs:
   server-setup:
     runs-on: ubuntu-latest
@@ -25,59 +30,53 @@ jobs:
       - name: Basic server setup
         run: |
           ssh root@${{ secrets.SSH_HOST }} << 'EOF'
-          # Создаем пользователя deploy (если ещё не существует)
+          #!/bin/bash
+          set -e
+
+          # 1. Создание пользователя deploy
           if ! id -u deploy >/dev/null 2>&1; then
             echo "Создание пользователя deploy..."
-            sudo adduser --disabled-password --gecos "" deploy
-            sudo usermod -aG sudo deploy
+            adduser --disabled-password --gecos "" deploy
+            usermod -aG sudo deploy
           
-            # Настраиваем SSH-директорию
-            sudo mkdir -p /home/deploy/.ssh
-            sudo touch /home/deploy/.ssh/authorized_keys
-            sudo chown -R deploy:deploy /home/deploy/.ssh
-            sudo chmod 700 /home/deploy/.ssh
-            sudo chmod 600 /home/deploy/.ssh/authorized_keys
+            mkdir -p /home/deploy/.ssh
+            echo "${{ secrets.DEPLOY_PUBLIC_KEY }}" > /home/deploy/.ssh/authorized_keys
+            chown -R deploy:deploy /home/deploy/.ssh
+            chmod 700 /home/deploy/.ssh
+            chmod 600 /home/deploy/.ssh/authorized_keys
           
-            # Копируем публичный ключ из secrets
-            echo "${{ secrets.DEPLOY_PUBLIC_KEY }}" | sudo tee /home/deploy/.ssh/authorized_keys
+            echo "deploy ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/deploy
+            chmod 440 /etc/sudoers.d/deploy
           
-            # Настраиваем sudo без пароля
-            echo "deploy ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/deploy
-            sudo chmod 440 /etc/sudoers.d/deploy
-          else
-            echo "Пользователь deploy уже существует"
+            # Отключаем root-доступ по SSH после настройки
+            sed -i 's/^PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
+            systemctl restart ssh
           fi
 
-          # Обновление системы
-          # Настройка автоматического разрешения конфликтов
-          echo 'Dpkg::Options {
-          "--force-confdef";
-          "--force-confold";
-          }' | sudo tee /etc/apt/apt.conf.d/local
+          # 2. Обновление системы
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -y
+          apt-get upgrade -y
 
-          # Явно запрещаем major-апгрейд
-          sudo sed -i 's/Prompt=lts/Prompt=never/' /etc/update-manager/release-upgrades
-          
-          # Обновление только security-пакетов (без предложения апгрейда ОС)
-          sudo apt update && sudo DEBIAN_FRONTEND=noninteractive apt-get -y \
-          -o Dpkg::Options::="--force-confdef" \
-          -o Dpkg::Options::="----force-confold" \
-          --only-upgrade install $(apt list --upgradable 2>/dev/null | grep -v Listing | grep security | cut -d/ -f1)
+          # 3. Установка базовых зависимостей
+          apt-get install -y build-essential git curl ufw
 
-          # Установка базовых зависимостей
-          sudo apt install -y build-essential gcc
-
-          # Настройка swap
+          # 4. Настройка swap
           if [ ! -f /swapfile ]; then
-            sudo fallocate -l 1G /swapfile
-            sudo chmod 600 /swapfile
-            sudo mkswap /swapfile
-            sudo swapon /swapfile
-            echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
-            echo "Swap file создан"
-          else
-            echo "Swap file уже существует"
+            fallocate -l $SWAP_SIZE /swapfile
+            chmod 600 /swapfile
+            mkswap /swapfile
+            swapon /swapfile
+            echo '/swapfile none swap sw 0 0' >> /etc/fstab
           fi
+
+          # 5. Настройка firewall
+          ufw allow OpenSSH
+          ufw --force enable
+
+          # 6. Создание директории приложения
+          mkdir -p $APP_DIR
+          chown deploy:deploy $APP_DIR
           EOF
 
   setup-database:
@@ -98,35 +97,37 @@ jobs:
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Configure PostgreSQL
+      - name: Install and configure PostgreSQL
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          # Проверяем, установлен ли PostgreSQL
+          #!/bin/bash
+          set -e
+
+          # Установка PostgreSQL если не установлен
           if ! command -v psql &> /dev/null; then
-            echo "Установка PostgreSQL..."
-            sudo apt update
-            sudo apt install -y postgresql postgresql-contrib
+            sudo apt-get update
+            sudo apt-get install -y postgresql postgresql-contrib
           fi
 
-          # Создаем пользователя и БД (запускаем от postgres)
+          # Создание пользователя и БД
           sudo -u postgres psql -c "CREATE USER windowwash WITH PASSWORD '${{ secrets.DB_PASSWORD }}';" || true
           sudo -u postgres psql -c "CREATE DATABASE windowwash OWNER windowwash;" || true
 
-          # Настраиваем аутентификацию
-          echo "Настройка pg_hba.conf..."
-          sudo bash -c 'echo "host    windowwash    windowwash    127.0.0.1/32    md5" >> /etc/postgresql/*/main/pg_hba.conf'
-          sudo bash -c 'echo "local   windowwash    windowwash                   md5" >> /etc/postgresql/*/main/pg_hba.conf'
-          
-          # Перезапускаем PostgreSQL
+          # Настройка аутентификации
+          sudo bash -c 'cat >> /etc/postgresql/*/main/pg_hba.conf << "HBA_EOF"
+          host    windowwash    windowwash    127.0.0.1/32    md5
+          local   windowwash    windowwash                   md5
+          HBA_EOF'
+
           sudo systemctl restart postgresql
 
-          # Проверяем подключение
-          PGPASSWORD='${{ secrets.DB_PASSWORD }}' psql -U windowwash -d windowwash -h 127.0.0.1 -c "SELECT 1" || exit 1
+          # Проверка подключения
+          PGPASSWORD='${{ secrets.DB_PASSWORD }}' psql -U windowwash -d windowwash -h 127.0.0.1 -c "SELECT 1"
           EOF
 
       - name: Apply database schema
         run: |
-          scp schema.sql deploy@${{ secrets.SSH_HOST }}:/tmp/schema.sql
+          rsync -avz schema.sql deploy@${{ secrets.SSH_HOST }}:/tmp/schema.sql
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
           PGPASSWORD='${{ secrets.DB_PASSWORD }}' psql -U windowwash -d windowwash -h 127.0.0.1 -f /tmp/schema.sql
           rm /tmp/schema.sql
@@ -144,58 +145,41 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Add server to known hosts
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-
-      - name: Install prerequisites
-        run: |
-          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          # Установка необходимых пакетов
-          sudo apt update
-          sudo apt install -y git
-
-          # Создание директории с правильными правами
-          sudo mkdir -p /var/www/window-wash-bot
-          sudo chown -R deploy:deploy /var/www/window-wash-bot
-          EOF
-
       - name: Deploy application
         run: |
-          # Копируем код на сервер
-          rsync -avz --delete --exclude='.git' ./ deploy@${{ secrets.SSH_HOST }}:/var/www/window-wash-bot/
+          rsync -avz --delete \
+            --exclude='.git' \
+            --exclude='.github' \
+            ./ deploy@${{ secrets.SSH_HOST }}:$APP_DIR/
 
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          cd /var/www/window-wash-bot
+          #!/bin/bash
+          set -e
+          cd $APP_DIR
 
-          # Создаем .env файл
+          # Создание .env файла
           cat > .env << "ENV_EOF"
           DATABASE_URL=postgres://windowwash:${{ secrets.DB_PASSWORD }}@localhost:5432/windowwash?sslmode=disable
           TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
           ENV_EOF
           chmod 600 .env
 
-          # Устанавливаем Go (если ещё не установлен)
+          # Установка Go
           if ! command -v go &> /dev/null; then
-            echo "Установка Go..."
-            wget https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
+            curl -OL https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz
             sudo rm -rf /usr/local/go
-            sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
-            rm go1.24.0.linux-amd64.tar.gz
+            sudo tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz
             echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
             source ~/.bashrc
+            rm go${GO_VERSION}.linux-amd64.tar.gz
           fi
 
-          # Добавляем Go в PATH для текущей сессии
+          # Сборка приложения
           export PATH=$PATH:/usr/local/go/bin
-
-          # Собираем приложение
           go mod tidy
           go build -o telebot .
 
-          # Настраиваем systemd сервис
+          # Настройка systemd сервиса
           sudo bash -c 'cat > /etc/systemd/system/window-wash-bot.service << "SERVICE_EOF"
           [Unit]
           Description=Window Wash Telegram Bot
@@ -204,9 +188,9 @@ jobs:
           [Service]
           User=deploy
           Group=deploy
-          WorkingDirectory=/var/www/window-wash-bot
-          EnvironmentFile=/var/www/window-wash-bot/.env
-          ExecStart=/var/www/window-wash-bot/telebot
+          WorkingDirectory=$APP_DIR
+          EnvironmentFile=$APP_DIR/.env
+          ExecStart=$APP_DIR/telebot
           Restart=always
           RestartSec=5
 
@@ -222,7 +206,6 @@ jobs:
       - name: Verify deployment
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          sleep 5
           if ! systemctl is-active --quiet window-wash-bot; then
             journalctl -u window-wash-bot -n 50 --no-pager
             exit 1
