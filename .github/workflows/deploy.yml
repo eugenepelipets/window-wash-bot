@@ -35,12 +35,12 @@ jobs:
           sudo -u postgres psql -c "CREATE USER windowwash WITH PASSWORD '${{ secrets.DB_PASSWORD }}';"
           sudo -u postgres psql -c "CREATE DATABASE windowwash OWNER windowwash;"
           
-          # Применение схемы
-          sudo -u postgres psql -d windowwash -f /tmp/schema.sql
-          
           # Настройка доступа
           echo "host    windowwash    windowwash    127.0.0.1/32    md5" | sudo tee -a /etc/postgresql/*/main/pg_hba.conf
           sudo systemctl restart postgresql
+          
+          # Применение схемы
+          sudo -u postgres psql -d windowwash -f /tmp/schema.sql
           
           # Очистка
           rm /tmp/schema.sql
@@ -69,9 +69,9 @@ jobs:
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
           if ! command -v go &> /dev/null; then
             echo "Installing Go..."
-            wget https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
-            sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
-            rm go1.24.0.linux-amd64.tar.gz
+            wget https://go.dev/dl/go1.21.4.linux-amd64.tar.gz
+            sudo tar -C /usr/local -xzf go1.21.4.linux-amd64.tar.gz
+            rm go1.21.4.linux-amd64.tar.gz
             echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
             source ~/.bashrc
           else
@@ -96,13 +96,15 @@ jobs:
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
           cd /var/www/window-wash-bot
           
-          # Создаем .env файл
-          cat > .env << 'ENV_EOF'
+          # Создаем .env файл с правильными правами
+          sudo -u deploy bash -c 'cat > /var/www/window-wash-bot/.env << "ENV_EOF"
           DATABASE_URL=postgres://windowwash:${{ secrets.DB_PASSWORD }}@localhost:5432/windowwash
           TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
-          ENV_EOF
+          ENV_EOF'
           
-          chmod 600 .env
+          # Устанавливаем правильные права
+          chmod 600 /var/www/window-wash-bot/.env
+          chown deploy:deploy /var/www/window-wash-bot/.env
           
           # Устанавливаем зависимости и собираем проект
           export PATH=$PATH:/usr/local/go/bin
@@ -119,6 +121,7 @@ jobs:
           User=deploy
           Group=deploy
           WorkingDirectory=/var/www/window-wash-bot
+          EnvironmentFile=/var/www/window-wash-bot/.env
           ExecStart=/var/www/window-wash-bot/telebot
           Restart=always
           
@@ -135,7 +138,7 @@ jobs:
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
           if ! systemctl is-active window-wash-bot; then
-            journalctl -u window-wash-bot -n 20
+            journalctl -u window-wash-bot -n 20 --no-pager
             exit 1
           fi
           echo "Service is running successfully"
