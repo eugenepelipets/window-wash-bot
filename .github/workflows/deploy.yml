@@ -17,11 +17,11 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           known_hosts: ${{ secrets.KNOWN_HOSTS }}
 
-      - name: Deploy to server
+      - name: Deploy
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
-          cd /var/www/window-wash-bot
-          git pull origin main
-          go build -o telebot main.go
-          sudo systemctl restart window-wash-bot
-          EOF
+          ssh -i ~/.ssh/github_actions deploy@${{ secrets.SSH_HOST }} "
+            cd /var/www/window-wash-bot
+            git pull origin main
+            /usr/local/go/bin/go build -o telebot main.go
+            sudo systemctl restart window-wash-bot
+          "
