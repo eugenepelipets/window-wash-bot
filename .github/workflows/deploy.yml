@@ -22,9 +22,46 @@ jobs:
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
+      - name: Setup PostgreSQL
+        run: |
+          ssh deploy@${{ secrets.SSH_HOST }} "
+            sudo apt-get update
+            sudo apt-get install -y postgresql postgresql-contrib
+            sudo -u postgres psql -c \"CREATE USER windowwash WITH PASSWORD '${{ secrets.DB_PASSWORD }}';\"
+            sudo -u postgres psql -c \"CREATE DATABASE windowwash OWNER windowwash;\"
+            sudo -u postgres psql -d windowwash -c \"
+              $(cat << 'EOF'
+              CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                telegram_id BIGINT NOT NULL UNIQUE,
+                username VARCHAR(100) NOT NULL,
+                first_name VARCHAR(100) NOT NULL,
+                last_name VARCHAR(100) NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+              );
+          
+              CREATE TABLE IF NOT EXISTS orders (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                window_type VARCHAR(20) NOT NULL,
+                floor INTEGER NOT NULL,
+                apartment VARCHAR(10) NOT NULL,
+                price INTEGER NOT NULL,
+                status VARCHAR(20) DEFAULT 'pending',
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                FOREIGN KEY (user_id) REFERENCES users (telegram_id)
+              );
+          
+              CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
+              CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+              EOF
+              )
+            \"
+          "
+
       - name: Prepare server directory
         run: |
-          ssh -o StrictHostKeyChecking=yes deploy@${{ secrets.SSH_HOST }} "
+          ssh deploy@${{ secrets.SSH_HOST }} "
             rm -rf /var/www/window-wash-bot/*
             git clone --depth 1 https://github.com/${{ github.repository }}.git /var/www/window-wash-bot
             chown -R deploy:deploy /var/www/window-wash-bot
@@ -34,6 +71,9 @@ jobs:
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} "
             cd /var/www/window-wash-bot
+            echo 'DATABASE_URL=postgres://windowwash:${{ secrets.DB_PASSWORD }}@localhost:5432/windowwash' > .env
+            echo 'TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}' >> .env
+            chmod 600 .env
             /usr/local/go/bin/go mod tidy
             /usr/local/go/bin/go build -o telebot .
             sudo systemctl restart window-wash-bot
