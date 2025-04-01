@@ -48,8 +48,8 @@ jobs:
             echo "deploy ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/deploy
             chmod 440 /etc/sudoers.d/deploy
           
-            # Отключаем root-доступ по SSH после настройки
-            sed -i 's/^PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
+            # НЕ отключаем root-доступ (закомментируйте эту строку):
+            # sed -i 's/^PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
             systemctl restart ssh
           fi
 
@@ -63,7 +63,7 @@ jobs:
 
           # 4. Настройка swap
           if [ ! -f /swapfile ]; then
-            fallocate -l $SWAP_SIZE /swapfile
+            fallocate -l $SWAP_SIZE /swapfile && echo "Swap file создан" || dd if=/dev/zero of=/swapfile bs=1M count=1024
             chmod 600 /swapfile
             mkswap /swapfile
             swapon /swapfile
