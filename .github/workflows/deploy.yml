@@ -148,33 +148,42 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
+      - name: Add server to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_HOST }} $(ssh-keyscan -H ${{ secrets.SSH_HOST }} 2>/dev/null)" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
       - name: Deploy application
         run: |
-          rsync -avz --delete \
+          # Сначала копируем код через rsync с явным указанием ключа
+          rsync -avz -e "ssh -o StrictHostKeyChecking=no" \
+            --delete \
             --exclude='.git' \
             --exclude='.github' \
-            ./ deploy@${{ secrets.SSH_HOST }}:$APP_DIR/
+            ./ deploy@${{ secrets.SSH_HOST }}:${{ env.APP_DIR }}/
 
-          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          #!/bin/bash
+          # Затем выполняем настройку
+          ssh -o StrictHostKeyChecking=no deploy@${{ secrets.SSH_HOST }} << 'EOF'
           set -e
-          cd $APP_DIR
+          cd ${{ env.APP_DIR }}
 
-          # Создание .env файла
+          # Создаем .env файл
           cat > .env << "ENV_EOF"
           DATABASE_URL=postgres://windowwash:${{ secrets.DB_PASSWORD }}@localhost:5432/windowwash?sslmode=disable
           TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
           ENV_EOF
           chmod 600 .env
 
-          # Установка Go
+          # Установка Go (если ещё не установлен)
           if ! command -v go &> /dev/null; then
-            curl -OL https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz
+            echo "Установка Go..."
+            curl -OL https://go.dev/dl/go${{ env.GO_VERSION }}.linux-amd64.tar.gz
             sudo rm -rf /usr/local/go
-            sudo tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz
+            sudo tar -C /usr/local -xzf go${{ env.GO_VERSION }}.linux-amd64.tar.gz
             echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
             source ~/.bashrc
-            rm go${GO_VERSION}.linux-amd64.tar.gz
+            rm go${{ env.GO_VERSION }}.linux-amd64.tar.gz
           fi
 
           # Сборка приложения
@@ -191,9 +200,9 @@ jobs:
           [Service]
           User=deploy
           Group=deploy
-          WorkingDirectory=$APP_DIR
-          EnvironmentFile=$APP_DIR/.env
-          ExecStart=$APP_DIR/telebot
+          WorkingDirectory=${{ env.APP_DIR }}
+          EnvironmentFile=${{ env.APP_DIR }}/.env
+          ExecStart=${{ env.APP_DIR }}/telebot
           Restart=always
           RestartSec=5
 
@@ -208,7 +217,8 @@ jobs:
 
       - name: Verify deployment
         run: |
-          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
+          ssh -o StrictHostKeyChecking=no deploy@${{ secrets.SSH_HOST }} << 'EOF'
+          set -e
           if ! systemctl is-active --quiet window-wash-bot; then
             journalctl -u window-wash-bot -n 50 --no-pager
             exit 1
