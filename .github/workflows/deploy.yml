@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 jobs:
-  server-setup:
+  provision-server:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -22,97 +22,55 @@ jobs:
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Basic server setup
+      - name: Setup fresh Ubuntu server
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          # Обновление системы
+          # 1. Обновление системы
           sudo apt update && sudo apt upgrade -y
 
-          # Установка базовых зависимостей
-          sudo apt install -y build-essential gcc
+          # 2. Установка зависимостей
+          sudo apt install -y build-essential gcc git
 
-          # Настройка swap
+          # 3. Настройка swap (если нет)
           if [ ! -f /swapfile ]; then
             sudo fallocate -l 1G /swapfile
             sudo chmod 600 /swapfile
             sudo mkswap /swapfile
             sudo swapon /swapfile
             echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
-            echo "Swap file создан"
-          else
-            echo "Swap file уже существует"
           fi
 
-          # Настройка прав для пользователя deploy
-          echo "Настройка sudo прав для пользователя deploy..."
-          if [ ! -f /etc/sudoers.d/deploy ]; then
-            echo "deploy ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/deploy
-            sudo chmod 440 /etc/sudoers.d/deploy
-            echo "Права для deploy настроены"
-          else
-            echo "Права для deploy уже настроены"
-          fi
+          # 4. Права для deploy (NOPASSWD)
+          echo "deploy ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/deploy
+          sudo chmod 440 /etc/sudoers.d/deploy
 
-          # Настройка пользователя PostgreSQL
-          echo "Настройка пользователя БД..."
-          sudo -u postgres createuser --superuser windowwash || true
-          sudo -u postgres psql -c "ALTER USER windowwash WITH PASSWORD '${{ secrets.DB_PASSWORD }}';" || true
-          EOF
+          # 5. Установка PostgreSQL
+          sudo apt install -y postgresql postgresql-contrib
 
-  setup-database:
-    needs: server-setup
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup SSH
-        uses: webfactory/ssh-agent@v0.7.0
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-
-      - name: Add server to known hosts
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-
-      - name: Configure PostgreSQL
-        run: |
-          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          # Проверяем, установлен ли PostgreSQL
-          if ! command -v psql &> /dev/null; then
-            echo "Установка PostgreSQL..."
-            sudo apt update
-            sudo apt install -y postgresql postgresql-contrib
-          fi
-
-          # Создаем пользователя и БД (запускаем от postgres)
+          # 6. Создание пользователя БД
           sudo -u postgres psql -c "CREATE USER windowwash WITH PASSWORD '${{ secrets.DB_PASSWORD }}';" || true
           sudo -u postgres psql -c "CREATE DATABASE windowwash OWNER windowwash;" || true
 
-          # Настраиваем аутентификацию
-          echo "Настройка pg_hba.conf..."
-          sudo bash -c 'echo "host    windowwash    windowwash    127.0.0.1/32    md5" >> /etc/postgresql/*/main/pg_hba.conf'
-          sudo bash -c 'echo "local   windowwash    windowwash                   md5" >> /etc/postgresql/*/main/pg_hba.conf'
-          
-          # Перезапускаем PostgreSQL
+          # 7. Настройка аутентификации
+          sudo tee -a /etc/postgresql/*/main/pg_hba.conf << "PG_HBA_EOF"
+          # Window Wash Bot Access
+          host    windowwash    windowwash    127.0.0.1/32    md5
+          local   windowwash    windowwash                   md5
+          PG_HBA_EOF
+
           sudo systemctl restart postgresql
 
-          # Проверяем подключение
-          PGPASSWORD='${{ secrets.DB_PASSWORD }}' psql -U windowwash -d windowwash -h 127.0.0.1 -c "SELECT 1" || exit 1
-          EOF
-
-      - name: Apply database schema
-        run: |
-          scp schema.sql deploy@${{ secrets.SSH_HOST }}:/tmp/schema.sql
-          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          PGPASSWORD='${{ secrets.DB_PASSWORD }}' psql -U windowwash -d windowwash -h 127.0.0.1 -f /tmp/schema.sql
-          rm /tmp/schema.sql
+          # 8. Установка Go
+          wget https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
+          sudo rm -rf /usr/local/go
+          sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
+          rm go1.24.0.linux-amd64.tar.gz
+          echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+          source ~/.bashrc
           EOF
 
   deploy:
-    needs: setup-database
+    needs: provision-server
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -122,31 +80,11 @@ jobs:
         uses: webfactory/ssh-agent@v0.7.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-
-      - name: Add server to known hosts
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-
-      - name: Install Go
-        run: |
-          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          if ! command -v go &> /dev/null; then
-            echo "Установка Go..."
-            wget https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
-            sudo rm -rf /usr/local/go
-            sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
-            rm go1.24.0.linux-amd64.tar.gz
-            echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
-            source ~/.bashrc
-          fi
-          EOF
 
       - name: Deploy application
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          # Подготовка директории
+          # 1. Клонирование кода
           mkdir -p /var/www/window-wash-bot
           cd /var/www/window-wash-bot
           git init
@@ -154,20 +92,20 @@ jobs:
           git fetch --depth 1 origin main
           git reset --hard FETCH_HEAD
 
-          # Создаем .env файл
+          # 2. Настройка .env
           cat > .env << "ENV_EOF"
           DATABASE_URL=postgres://windowwash:${{ secrets.DB_PASSWORD }}@localhost:5432/windowwash?sslmode=disable
           TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
           ENV_EOF
           chmod 600 .env
 
-          # Собираем приложение
+          # 3. Сборка приложения
           export PATH=$PATH:/usr/local/go/bin
           go mod tidy
           go build -o telebot .
 
-          # Настраиваем systemd сервис
-          sudo bash -c 'cat > /etc/systemd/system/window-wash-bot.service << "SERVICE_EOF"
+          # 4. Systemd сервис
+          sudo tee /etc/systemd/system/window-wash-bot.service << "SERVICE_EOF"
           [Unit]
           Description=Window Wash Telegram Bot
           After=network.target postgresql.service
@@ -183,7 +121,7 @@ jobs:
           
           [Install]
           WantedBy=multi-user.target
-          SERVICE_EOF'
+          SERVICE_EOF
 
           sudo systemctl daemon-reload
           sudo systemctl enable window-wash-bot
@@ -198,5 +136,5 @@ jobs:
             journalctl -u window-wash-bot -n 50 --no-pager
             exit 1
           fi
-          echo "✅ Сервис успешно запущен"
+          echo "✅ Бот успешно запущен!"
           EOF
