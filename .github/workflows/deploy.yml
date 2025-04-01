@@ -5,7 +5,47 @@ on:
     branches: [main]
 
 jobs:
+  server-setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.7.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add server to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Basic server setup
+        run: |
+          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
+          # Обновление системы
+          sudo apt update && sudo apt upgrade -y
+          
+          # Установка базовых зависимостей
+          sudo apt install -y build-essential gcc
+          
+          # Настройка swap
+          if [ ! -f /swapfile ]; then
+            sudo fallocate -l 1G /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+            echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+            echo "Swap file создан"
+          else
+            echo "Swap file уже существует"
+          fi
+          EOF
+
   setup-database:
+    needs: server-setup
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -28,8 +68,8 @@ jobs:
           # Проверяем, установлен ли PostgreSQL
           if ! command -v psql &> /dev/null; then
             echo "Установка PostgreSQL..."
-            sudo apt-get update
-            sudo apt-get install -y postgresql postgresql-contrib
+            sudo apt update
+            sudo apt install -y postgresql postgresql-contrib
           fi
 
           # Создаем пользователя и БД (запускаем от postgres)
@@ -80,6 +120,7 @@ jobs:
           if ! command -v go &> /dev/null; then
             echo "Установка Go..."
             wget https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
+            sudo rm -rf /usr/local/go
             sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
             rm go1.24.0.linux-amd64.tar.gz
             echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
