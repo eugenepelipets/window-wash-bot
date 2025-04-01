@@ -26,7 +26,12 @@ jobs:
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
           # Обновление системы
-          sudo apt update && sudo apt upgrade -y
+          echo 'Dpkg::Options {
+          "--force-confdef";
+          "--force-confold";
+          }' | sudo tee /etc/apt/apt.conf.d/local
+          
+          sudo apt update && sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade -y
 
           # Установка базовых зависимостей
           sudo apt install -y build-essential gcc
