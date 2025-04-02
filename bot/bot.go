@@ -3,6 +3,7 @@ package bot
 import (
 	"log"
 	"os"
+	"strings"
 
 	"github.com/eugenepelipets/window-wash-bot/models"
 	"github.com/eugenepelipets/window-wash-bot/storage"
@@ -58,11 +59,11 @@ func (b *Bot) Start() {
 
 // Обработка сообщений
 func (b *Bot) handleMessage(msg *tgbotapi.Message) {
-	switch msg.Text {
-	case "/start":
+	switch {
+	case msg.Text == "/start":
 		b.handleStart(msg)
-	case "/export":
-		b.handleExport(msg.Chat.ID)
+	case strings.HasPrefix(msg.Text, "/export"):
+		b.handleExport(msg)
 	default:
 		b.sendMessage(msg.Chat.ID, "Я не понимаю эту команду 🤔")
 	}

@@ -1,5 +1,5 @@
--- DROP TABLE IF EXISTS users,
---     orders;
+DROP TABLE IF EXISTS users,
+    orders;
 
 CREATE TABLE IF NOT EXISTS users
 (
@@ -20,9 +20,10 @@ CREATE TABLE IF NOT EXISTS orders
     apartment   VARCHAR(10) NOT NULL,
     price       INTEGER     NOT NULL,
     status      VARCHAR(20)              DEFAULT 'pending',
+    is_current  BOOLEAN                  DEFAULT TRUE,
     created_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     FOREIGN KEY (user_id) REFERENCES users (telegram_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
-CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status);
+CREATE INDEX idx_orders_current ON orders (user_id, apartment, is_current);

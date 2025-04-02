@@ -11,5 +11,6 @@ type Order struct {
 	Price      int       `db:"price"`
 	Status     string    `db:"status"`
 	CreatedAt  time.Time `db:"created_at"`
+	IsCurrent  bool      `db:"is_current"`
 	User       User      `db:"-"`
 }

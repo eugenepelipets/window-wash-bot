@@ -70,12 +70,28 @@ func (p *Postgres) SaveOrder(order models.Order) error {
 		return errors.New("не заполнены обязательные поля заказа")
 	}
 
-	query := `
-        INSERT INTO orders (user_id, window_type, floor, apartment, price, status, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-    `
+	// Начинаем транзакцию
+	tx, err := p.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
 
-	_, err := p.Pool.Exec(ctx, query,
+	// Помечаем предыдущие заказы для этой квартиры как неактуальные
+	_, err = tx.Exec(ctx, `
+        UPDATE orders 
+        SET is_current = false 
+        WHERE user_id = $1 AND apartment = $2 AND is_current = true`,
+		order.UserID, order.Apartment)
+	if err != nil {
+		return err
+	}
+
+	// Сохраняем новый заказ
+	_, err = tx.Exec(ctx, `
+        INSERT INTO orders 
+        (user_id, window_type, floor, apartment, price, status, is_current, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, true)`,
 		order.UserID,
 		order.WindowType,
 		order.Floor,
@@ -86,32 +102,32 @@ func (p *Postgres) SaveOrder(order models.Order) error {
 	)
 
 	if err != nil {
-		log.Printf("⚠️ Ошибка при сохранении заказа: %v", err)
 		return err
 	}
 
-	log.Printf("✅ Заказ сохранен для пользователя %d", order.UserID)
-	return nil
+	return tx.Commit(ctx)
 }
 
 // storage/postgres.go
 // Добавляем в конец файла
 
-// GetOrdersForExport получает все заказы для экспорта
-func (p *Postgres) GetOrdersForExport() ([]models.Order, error) {
+// GetOrdersForExport получает заказы для экспорта (с фильтром по актуальности)
+func (p *Postgres) GetOrdersForExport(onlyCurrent bool) ([]models.Order, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	query := `
         SELECT 
-            o.id, o.window_type, o.floor, o.apartment, o.price, o.status, o.created_at,
+            o.id, o.window_type, o.floor, o.apartment, o.price, 
+            o.status, o.is_current, o.created_at,
             u.telegram_id, u.username, u.first_name, u.last_name
         FROM orders o
         JOIN users u ON o.user_id = u.telegram_id
+        WHERE $1 = false OR o.is_current = true
         ORDER BY o.created_at DESC
     `
 
-	rows, err := p.Pool.Query(ctx, query)
+	rows, err := p.Pool.Query(ctx, query, onlyCurrent)
 	if err != nil {
 		return nil, err
 	}
@@ -128,6 +144,7 @@ func (p *Postgres) GetOrdersForExport() ([]models.Order, error) {
 			&order.Apartment,
 			&order.Price,
 			&order.Status,
+			&order.IsCurrent,
 			&order.CreatedAt,
 			&user.TelegramID,
 			&user.UserName,
