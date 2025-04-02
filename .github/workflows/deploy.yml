@@ -8,6 +8,7 @@ env:
   APP_DIR: /var/www/window-wash-bot
   GO_VERSION: 1.24.0
   SWAP_SIZE: 1G
+  ADMIN_TELEGRAM_ID: ${{ secrets.ADMIN_TELEGRAM_ID }}
 
 jobs:
   server-setup:
@@ -172,6 +173,7 @@ jobs:
           cat > .env << "ENV_EOF"
           DATABASE_URL=postgres://windowwash:${{ secrets.DB_PASSWORD }}@localhost:5432/windowwash?sslmode=disable
           TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
+          ADMIN_TELEGRAM_ID=${{ secrets.ADMIN_TELEGRAM_ID }}
           ENV_EOF
           chmod 600 .env
 
