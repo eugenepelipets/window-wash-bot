@@ -125,3 +125,42 @@ jobs:
             sudo systemctl restart postgresql
           fi
           EOF
+  deploy:
+    needs: setup-database
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy application
+        run: |
+          rsync -avz -e "ssh -o StrictHostKeyChecking=no" --delete --exclude={'.git','.github','logs'} ./ deploy@${{ secrets.SSH_HOST }}:${{ env.APP_DIR }}/
+          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
+          set -e
+          cd ${{ env.APP_DIR }}
+
+          printf "DATABASE_URL=postgres://windowwash:%s@localhost:5432/windowwash?sslmode=disable\nTELEGRAM_TOKEN=%s\n" "${{ secrets.DB_PASSWORD }}" "${{ secrets.TELEGRAM_TOKEN }}" > .env
+          chmod 600 .env
+
+          if ! go version | grep -q "${{ env.GO_VERSION }}"; then
+            curl -OL https://go.dev/dl/go${{ env.GO_VERSION }}.linux-amd64.tar.gz
+            sudo rm -rf /usr/local/go
+            sudo tar -C /usr/local -xzf go${{ env.GO_VERSION }}.linux-amd64.tar.gz
+            echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+            source ~/.bashrc
+            rm go${{ env.GO_VERSION }}.linux-amd64.tar.gz
+          fi
+
+          export PATH=$PATH:/usr/local/go/bin
+          go mod tidy
+          go build -o telebot .
+
+          sudo systemctl daemon-reload
+          sudo systemctl enable window-wash-bot
+          sudo systemctl restart window-wash-bot
+          EOF
+
+      - name: Verify deployment
+        run: |
+          ssh deploy@${{ secrets.SSH_HOST }} "systemctl is-active --quiet window-wash-bot || (journalctl -u window-wash-bot -n 50 --no-pager && exit 1)"
+          echo "✅ Сервис успешно запущен"
