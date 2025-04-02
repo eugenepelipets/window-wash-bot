@@ -29,7 +29,7 @@ jobs:
 
       - name: Basic server setup
         run: |
-          ssh root@${{ secrets.SSH_HOST }} "bash -s" << 'EOF'
+          ssh root@${{ secrets.SSH_HOST }} "APP_DIR=${{ env.APP_DIR }} SWAP_SIZE=${{ env.SWAP_SIZE }} bash -s" << 'EOF'
           #!/bin/bash
           set -e
           
@@ -134,24 +134,6 @@ jobs:
           export PATH=$PATH:/usr/local/go/bin
           go mod tidy
           go build -o telebot .
-
-          sudo bash -c 'cat > /etc/systemd/system/window-wash-bot.service << "SERVICE_EOF"
-          [Unit]
-          Description=Window Wash Telegram Bot
-          After=network.target postgresql.service
-
-          [Service]
-          User=deploy
-          Group=deploy
-          WorkingDirectory=${{ env.APP_DIR }}
-          EnvironmentFile=${{ env.APP_DIR }}/.env
-          ExecStart=${{ env.APP_DIR }}/telebot
-          Restart=always
-          RestartSec=5
-
-          [Install]
-          WantedBy=multi-user.target
-          SERVICE_EOF'
 
           sudo systemctl daemon-reload
           sudo systemctl enable window-wash-bot
