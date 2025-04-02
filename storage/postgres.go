@@ -87,11 +87,11 @@ func (p *Postgres) SaveOrder(order models.Order) error {
 		return err
 	}
 
-	// Сохраняем новый заказ
+	// Сохраняем новый заказ (ИСПРАВЛЕННЫЙ ЗАПРОС)
 	_, err = tx.Exec(ctx, `
         INSERT INTO orders 
         (user_id, window_type, floor, apartment, price, status, is_current, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, true)`,
+        VALUES ($1, $2, $3, $4, $5, $6, true, $7)`, // is_current=true, created_at=$7
 		order.UserID,
 		order.WindowType,
 		order.Floor,
@@ -102,6 +102,7 @@ func (p *Postgres) SaveOrder(order models.Order) error {
 	)
 
 	if err != nil {
+		log.Printf("⚠️ Ошибка при сохранении заказа: %v", err) // Добавим лог
 		return err
 	}
 
