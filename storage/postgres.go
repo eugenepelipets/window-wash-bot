@@ -93,3 +93,53 @@ func (p *Postgres) SaveOrder(order models.Order) error {
 	log.Printf("✅ Заказ сохранен для пользователя %d", order.UserID)
 	return nil
 }
+
+// storage/postgres.go
+// Добавляем в конец файла
+
+// GetOrdersForExport получает все заказы для экспорта
+func (p *Postgres) GetOrdersForExport() ([]models.Order, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	query := `
+        SELECT 
+            o.id, o.window_type, o.floor, o.apartment, o.price, o.status, o.created_at,
+            u.telegram_id, u.username, u.first_name, u.last_name
+        FROM orders o
+        JOIN users u ON o.user_id = u.telegram_id
+        ORDER BY o.created_at DESC
+    `
+
+	rows, err := p.Pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orders []models.Order
+	for rows.Next() {
+		var order models.Order
+		var user models.User
+		err := rows.Scan(
+			&order.ID,
+			&order.WindowType,
+			&order.Floor,
+			&order.Apartment,
+			&order.Price,
+			&order.Status,
+			&order.CreatedAt,
+			&user.TelegramID,
+			&user.UserName,
+			&user.FirstName,
+			&user.LastName,
+		)
+		if err != nil {
+			return nil, err
+		}
+		order.User = user
+		orders = append(orders, order)
+	}
+
+	return orders, nil
+}

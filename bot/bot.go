@@ -61,6 +61,8 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 	switch msg.Text {
 	case "/start":
 		b.handleStart(msg)
+	case "/export":
+		b.handleExport(msg.Chat.ID)
 	default:
 		b.sendMessage(msg.Chat.ID, "Я не понимаю эту команду 🤔")
 	}
