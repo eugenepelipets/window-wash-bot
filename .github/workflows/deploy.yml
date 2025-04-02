@@ -59,7 +59,7 @@ jobs:
           # 3. Установка базовых зависимостей
           apt-get install -y build-essential git curl ufw
 
-          # 4. Настройка swap
+          # 4. Настройка swap (исправленная версия)
           if [ ! -f /swapfile ]; then
             if ! fallocate -l \$SWAP_SIZE /swapfile 2>/dev/null; then
               echo "Используем dd для создания swap..."
@@ -76,7 +76,7 @@ jobs:
           ufw allow OpenSSH
           ufw --force enable
 
-          # 6. Создание директории приложения
+          # 6. Создание директории приложения (исправлено)
           mkdir -p "\$APP_DIR"
           chown deploy:deploy "\$APP_DIR"
           echo "Директория приложения создана: \$APP_DIR"
@@ -106,25 +106,36 @@ jobs:
           #!/bin/bash
           set -e
 
-          # Установка PostgreSQL
+          # Установка PostgreSQL если не установлен
           if ! command -v psql &> /dev/null; then
             sudo apt-get update
             sudo apt-get install -y postgresql postgresql-contrib
           fi
 
           # Создание пользователя и БД
-          sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='windowwash'" | grep -q 1 || 
-          sudo -u postgres psql -c "CREATE USER windowwash WITH PASSWORD '${{ secrets.DB_PASSWORD }}';"
-          
-          sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='windowwash'" | grep -q 1 || 
-          sudo -u postgres psql -c "CREATE DATABASE windowwash OWNER windowwash;"
+          sudo -u postgres psql -c "CREATE USER windowwash WITH PASSWORD '${{ secrets.DB_PASSWORD }}';" || true
+          sudo -u postgres psql -c "CREATE DATABASE windowwash OWNER windowwash;" || true
 
           # Настройка аутентификации
-          if ! grep -q "host windowwash windowwash 127.0.0.1/32 md5" /etc/postgresql/*/main/pg_hba.conf; then
-            echo "host windowwash windowwash 127.0.0.1/32 md5" | sudo tee -a /etc/postgresql/*/main/pg_hba.conf
-            sudo systemctl restart postgresql
-          fi
+          sudo bash -c 'cat >> /etc/postgresql/*/main/pg_hba.conf << "HBA_EOF"
+          host    windowwash    windowwash    127.0.0.1/32    md5
+          local   windowwash    windowwash                   md5
+          HBA_EOF'
+
+          sudo systemctl restart postgresql
+
+          # Проверка подключения
+          PGPASSWORD='${{ secrets.DB_PASSWORD }}' psql -U windowwash -d windowwash -h 127.0.0.1 -c "SELECT 1"
           EOF
+
+      - name: Apply database schema
+        run: |
+          rsync -avz schema.sql deploy@${{ secrets.SSH_HOST }}:/tmp/schema.sql
+          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
+          PGPASSWORD='${{ secrets.DB_PASSWORD }}' psql -U windowwash -d windowwash -h 127.0.0.1 -f /tmp/schema.sql
+          rm /tmp/schema.sql
+          EOF
+
   deploy:
     needs: setup-database
     runs-on: ubuntu-latest
@@ -132,17 +143,41 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.7.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add server to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_HOST }} $(ssh-keyscan -H ${{ secrets.SSH_HOST }} 2>/dev/null)" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
       - name: Deploy application
         run: |
-          rsync -avz -e "ssh -o StrictHostKeyChecking=no" --delete --exclude={'.git','.github','logs'} ./ deploy@${{ secrets.SSH_HOST }}:${{ env.APP_DIR }}/
-          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
+          # Сначала копируем код через rsync с явным указанием ключа
+          rsync -avz -e "ssh -o StrictHostKeyChecking=no" \
+            --delete \
+            --exclude='.git' \
+            --exclude='.github' \
+            ./ deploy@${{ secrets.SSH_HOST }}:${{ env.APP_DIR }}/
+
+          # Затем выполняем настройку
+          ssh -o StrictHostKeyChecking=no deploy@${{ secrets.SSH_HOST }} << 'EOF'
           set -e
           cd ${{ env.APP_DIR }}
 
-          printf "DATABASE_URL=postgres://windowwash:%s@localhost:5432/windowwash?sslmode=disable\nTELEGRAM_TOKEN=%s\n" "${{ secrets.DB_PASSWORD }}" "${{ secrets.TELEGRAM_TOKEN }}" > .env
+          # Создаем .env файл
+          cat > .env << "ENV_EOF"
+          DATABASE_URL=postgres://windowwash:${{ secrets.DB_PASSWORD }}@localhost:5432/windowwash?sslmode=disable
+          TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
+          ENV_EOF
           chmod 600 .env
 
-          if ! go version | grep -q "${{ env.GO_VERSION }}"; then
+          # Установка Go (если ещё не установлен)
+          if ! command -v go &> /dev/null; then
+            echo "Установка Go..."
             curl -OL https://go.dev/dl/go${{ env.GO_VERSION }}.linux-amd64.tar.gz
             sudo rm -rf /usr/local/go
             sudo tar -C /usr/local -xzf go${{ env.GO_VERSION }}.linux-amd64.tar.gz
@@ -151,9 +186,29 @@ jobs:
             rm go${{ env.GO_VERSION }}.linux-amd64.tar.gz
           fi
 
+          # Сборка приложения
           export PATH=$PATH:/usr/local/go/bin
           go mod tidy
           go build -o telebot .
+
+          # Настройка systemd сервиса
+          sudo bash -c 'cat > /etc/systemd/system/window-wash-bot.service << "SERVICE_EOF"
+          [Unit]
+          Description=Window Wash Telegram Bot
+          After=network.target postgresql.service
+
+          [Service]
+          User=deploy
+          Group=deploy
+          WorkingDirectory=${{ env.APP_DIR }}
+          EnvironmentFile=${{ env.APP_DIR }}/.env
+          ExecStart=${{ env.APP_DIR }}/telebot
+          Restart=always
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+          SERVICE_EOF'
 
           sudo systemctl daemon-reload
           sudo systemctl enable window-wash-bot
@@ -162,5 +217,11 @@ jobs:
 
       - name: Verify deployment
         run: |
-          ssh deploy@${{ secrets.SSH_HOST }} "systemctl is-active --quiet window-wash-bot || (journalctl -u window-wash-bot -n 50 --no-pager && exit 1)"
+          ssh -o StrictHostKeyChecking=no deploy@${{ secrets.SSH_HOST }} << 'EOF'
+          set -e
+          if ! systemctl is-active --quiet window-wash-bot; then
+            journalctl -u window-wash-bot -n 50 --no-pager
+            exit 1
+          fi
           echo "✅ Сервис успешно запущен"
+          EOF
