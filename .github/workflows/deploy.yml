@@ -29,57 +29,46 @@ jobs:
 
       - name: Basic server setup
         run: |
-          ssh root@${{ secrets.SSH_HOST }} "bash -s" << EOF
+          ssh root@${{ secrets.SSH_HOST }} "bash -s" << 'EOF'
           #!/bin/bash
           set -e
-          APP_DIR="${{ env.APP_DIR }}"
-          SWAP_SIZE="${{ env.SWAP_SIZE }}"
-
-          # 1. Создание пользователя deploy
+          
+          # Создание пользователя deploy
           if ! id -u deploy >/dev/null 2>&1; then
-            echo "Создание пользователя deploy..."
             adduser --disabled-password --gecos "" deploy
             usermod -aG sudo deploy
-          
             mkdir -p /home/deploy/.ssh
             echo "${{ secrets.DEPLOY_PUBLIC_KEY }}" > /home/deploy/.ssh/authorized_keys
             chown -R deploy:deploy /home/deploy/.ssh
             chmod 700 /home/deploy/.ssh
             chmod 600 /home/deploy/.ssh/authorized_keys
-          
             echo "deploy ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/deploy
             chmod 440 /etc/sudoers.d/deploy
           fi
 
-          # 2. Обновление системы
+          # Обновление системы и установка зависимостей
           export DEBIAN_FRONTEND=noninteractive
-          apt-get update -y
-          apt-get upgrade -y
-
-          # 3. Установка базовых зависимостей
+          apt-get update -y && apt-get upgrade -y
           apt-get install -y build-essential git curl ufw
 
-          # 4. Настройка swap (исправленная версия)
+          # Настройка swap
           if [ ! -f /swapfile ]; then
-            if ! fallocate -l \$SWAP_SIZE /swapfile 2>/dev/null; then
-              echo "Используем dd для создания swap..."
-              dd if=/dev/zero of=/swapfile bs=1M count=\$((\${SWAP_SIZE//[!0-9]/}*1024))
+            if ! fallocate -l $SWAP_SIZE /swapfile 2>/dev/null; then
+              dd if=/dev/zero of=/swapfile bs=1M count=$((${SWAP_SIZE//[!0-9]/}*1024)) status=progress
             fi
             chmod 600 /swapfile
             mkswap /swapfile
             swapon /swapfile
             echo '/swapfile none swap sw 0 0' >> /etc/fstab
-            echo "Swap file создан"
           fi
 
-          # 5. Настройка firewall
+          # Настройка firewall
           ufw allow OpenSSH
           ufw --force enable
 
-          # 6. Создание директории приложения (исправлено)
-          mkdir -p "\$APP_DIR"
-          chown deploy:deploy "\$APP_DIR"
-          echo "Директория приложения создана: \$APP_DIR"
+          # Создание директории приложения
+          mkdir -p "$APP_DIR"
+          chown deploy:deploy "$APP_DIR"
           EOF
 
   setup-database:
@@ -89,52 +78,32 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup SSH
-        uses: webfactory/ssh-agent@v0.7.0
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-
-      - name: Add server to known hosts
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-
       - name: Install and configure PostgreSQL
         run: |
           ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          #!/bin/bash
           set -e
-
-          # Установка PostgreSQL если не установлен
+          
           if ! command -v psql &> /dev/null; then
             sudo apt-get update
             sudo apt-get install -y postgresql postgresql-contrib
           fi
 
-          # Создание пользователя и БД
-          sudo -u postgres psql -c "CREATE USER windowwash WITH PASSWORD '${{ secrets.DB_PASSWORD }}';" || true
-          sudo -u postgres psql -c "CREATE DATABASE windowwash OWNER windowwash;" || true
+          sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='windowwash'" | grep -q 1 || \
+          sudo -u postgres psql -c "CREATE USER windowwash WITH PASSWORD '${{ secrets.DB_PASSWORD }}';"
 
-          # Настройка аутентификации
-          sudo bash -c 'cat >> /etc/postgresql/*/main/pg_hba.conf << "HBA_EOF"
-          host    windowwash    windowwash    127.0.0.1/32    md5
-          local   windowwash    windowwash                   md5
-          HBA_EOF'
+          sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='windowwash'" | grep -q 1 || \
+          sudo -u postgres psql -c "CREATE DATABASE windowwash OWNER windowwash;"
 
-          sudo systemctl restart postgresql
-
-          # Проверка подключения
-          PGPASSWORD='${{ secrets.DB_PASSWORD }}' psql -U windowwash -d windowwash -h 127.0.0.1 -c "SELECT 1"
+          if ! grep -q "host windowwash windowwash 127.0.0.1/32 md5" /etc/postgresql/*/main/pg_hba.conf; then
+            echo "host windowwash windowwash 127.0.0.1/32 md5" | sudo tee -a /etc/postgresql/*/main/pg_hba.conf
+            sudo systemctl restart postgresql
+          fi
           EOF
 
       - name: Apply database schema
         run: |
           rsync -avz schema.sql deploy@${{ secrets.SSH_HOST }}:/tmp/schema.sql
-          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          PGPASSWORD='${{ secrets.DB_PASSWORD }}' psql -U windowwash -d windowwash -h 127.0.0.1 -f /tmp/schema.sql
-          rm /tmp/schema.sql
-          EOF
+          ssh deploy@${{ secrets.SSH_HOST }} "PGPASSWORD='${{ secrets.DB_PASSWORD }}' psql -U windowwash -d windowwash -h 127.0.0.1 -f /tmp/schema.sql && rm /tmp/schema.sql"
 
   deploy:
     needs: setup-database
@@ -143,41 +112,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup SSH
-        uses: webfactory/ssh-agent@v0.7.0
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-
-      - name: Add server to known hosts
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_HOST }} $(ssh-keyscan -H ${{ secrets.SSH_HOST }} 2>/dev/null)" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-
       - name: Deploy application
         run: |
-          # Сначала копируем код через rsync с явным указанием ключа
-          rsync -avz -e "ssh -o StrictHostKeyChecking=no" \
-            --delete \
-            --exclude='.git' \
-            --exclude='.github' \
-            ./ deploy@${{ secrets.SSH_HOST }}:${{ env.APP_DIR }}/
-
-          # Затем выполняем настройку
-          ssh -o StrictHostKeyChecking=no deploy@${{ secrets.SSH_HOST }} << 'EOF'
+          rsync -avz -e "ssh -o StrictHostKeyChecking=no" --delete --exclude={'.git','.github','logs'} ./ deploy@${{ secrets.SSH_HOST }}:${{ env.APP_DIR }}/
+          ssh deploy@${{ secrets.SSH_HOST }} << 'EOF'
           set -e
           cd ${{ env.APP_DIR }}
 
-          # Создаем .env файл
-          cat > .env << "ENV_EOF"
-          DATABASE_URL=postgres://windowwash:${{ secrets.DB_PASSWORD }}@localhost:5432/windowwash?sslmode=disable
-          TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
-          ENV_EOF
+          printf "DATABASE_URL=postgres://windowwash:%s@localhost:5432/windowwash?sslmode=disable\nTELEGRAM_TOKEN=%s\n" "${{ secrets.DB_PASSWORD }}" "${{ secrets.TELEGRAM_TOKEN }}" > .env
           chmod 600 .env
 
-          # Установка Go (если ещё не установлен)
-          if ! command -v go &> /dev/null; then
-            echo "Установка Go..."
+          if ! go version | grep -q "${{ env.GO_VERSION }}"; then
             curl -OL https://go.dev/dl/go${{ env.GO_VERSION }}.linux-amd64.tar.gz
             sudo rm -rf /usr/local/go
             sudo tar -C /usr/local -xzf go${{ env.GO_VERSION }}.linux-amd64.tar.gz
@@ -185,13 +130,11 @@ jobs:
             source ~/.bashrc
             rm go${{ env.GO_VERSION }}.linux-amd64.tar.gz
           fi
-
-          # Сборка приложения
+          
           export PATH=$PATH:/usr/local/go/bin
           go mod tidy
           go build -o telebot .
 
-          # Настройка systemd сервиса
           sudo bash -c 'cat > /etc/systemd/system/window-wash-bot.service << "SERVICE_EOF"
           [Unit]
           Description=Window Wash Telegram Bot
@@ -217,11 +160,5 @@ jobs:
 
       - name: Verify deployment
         run: |
-          ssh -o StrictHostKeyChecking=no deploy@${{ secrets.SSH_HOST }} << 'EOF'
-          set -e
-          if ! systemctl is-active --quiet window-wash-bot; then
-            journalctl -u window-wash-bot -n 50 --no-pager
-            exit 1
-          fi
+          ssh deploy@${{ secrets.SSH_HOST }} "systemctl is-active --quiet window-wash-bot || (journalctl -u window-wash-bot -n 50 --no-pager && exit 1)"
           echo "✅ Сервис успешно запущен"
-          EOF
