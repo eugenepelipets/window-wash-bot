@@ -43,13 +43,18 @@ func (b *Bot) Start() {
 
 	for update := range updates {
 		if update.Message != nil {
-			switch userState[update.Message.Chat.ID] {
-			case "waiting_for_floor":
-				b.validateFloor(update.Message)
-			case "waiting_for_apartment":
-				b.validateApartment(update.Message)
-			default:
+			// Обрабатываем текстовые сообщения
+			if update.Message.IsCommand() {
 				b.handleMessage(update.Message)
+			} else {
+				// Проверяем текущее состояние пользователя
+				session := b.getSession(update.Message.Chat.ID)
+				switch session.CurrentState {
+				case StateWaitingForFloor, StateWaitingForApartment, StateTelegramNick:
+					b.handleTextMessage(update.Message)
+				default:
+					b.sendMessage(update.Message.Chat.ID, "Пожалуйста, используйте кнопки для продолжения.")
+				}
 			}
 		} else if update.CallbackQuery != nil {
 			b.handleCallback(update.CallbackQuery)

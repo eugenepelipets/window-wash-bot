@@ -109,6 +109,11 @@ func (b *Bot) handleTextMessage(msg *tgbotapi.Message) {
 			b.sendMessage(chatID, "Некорректный номер квартиры. Введите только цифры:")
 			return
 		}
+		apartment, err := strconv.Atoi(text)
+		if err != nil || apartment < 1 || apartment > 1500 {
+			b.sendMessage(chatID, "Некорректный номер квартиры. Введите цифру от 1 до 1500:")
+			return
+		}
 		session.Order.Apartment = text
 		b.updateState(chatID, StateWindowsSameOrDifferent)
 		b.sendMessage(chatID, "Количество створок на окнах одинаковое или разное?",
@@ -118,6 +123,6 @@ func (b *Bot) handleTextMessage(msg *tgbotapi.Message) {
 		b.handleTelegramNick(chatID, text)
 
 	default:
-		b.sendMessage(chatID, "Я не понимаю эту команду. Пожалуйста, используйте кнопки.")
+		b.sendMessage(chatID, "Пожалуйста, используйте кнопки для продолжения.")
 	}
 }
