@@ -222,28 +222,80 @@ func (b *Bot) handleTelegramNick(chatID int64, nick string) {
 }
 
 func (b *Bot) showOrderConfirmation(chatID int64, order models.Order) {
-	text := fmt.Sprintf(`Подтвердите заказ:
-    
-Подъезд: %d
-Этаж: %d
-Квартира: %s
+	// Рассчитываем стоимость для каждого типа
+	var window3Sum, window4Sum, window5Sum, window6_7Sum, balconySum int
+	var details strings.Builder
 
-Окна:
-- 3-створчатые: %d
-- 4-створчатые: %d
-- 5-створчатые: %d
-- 6-7-створчатые: %d
+	// Добавляем основную информацию
+	details.WriteString(fmt.Sprintf("Подтвердите заказ:\n\nПодъезд: %d\nЭтаж: %d\nКвартира: %s\n\nОкна:\n",
+		order.Entrance, order.Floor, order.Apartment))
 
-Лоджии: %d (%s, %s створки)
+	// Расчёт стоимости окон
+	if order.Window3Count > 0 {
+		window3Sum = order.Window3Count * 1000
+		details.WriteString(fmt.Sprintf("- 3-створчатые: %d * 1000 = %d руб.\n", order.Window3Count, window3Sum))
+	}
+	if order.Window4Count > 0 {
+		window4Sum = order.Window4Count * 1500
+		details.WriteString(fmt.Sprintf("- 4-створчатые: %d * 1500 = %d руб.\n", order.Window4Count, window4Sum))
+	}
+	if order.Window5Count > 0 {
+		window5Sum = order.Window5Count * 2000
+		details.WriteString(fmt.Sprintf("- 5-створчатые: %d * 2000 = %d руб.\n", order.Window5Count, window5Sum))
+	}
+	if order.Window6_7Count > 0 {
+		window6_7Sum = order.Window6_7Count * 2500
+		details.WriteString(fmt.Sprintf("- 6-7-створчатые: %d * 2500 = %d руб.\n", order.Window6_7Count, window6_7Sum))
+	}
 
-Итого стоимость: %d руб.`,
-		order.Entrance, order.Floor, order.Apartment,
-		order.Window3Count, order.Window4Count, order.Window5Count, order.Window6_7Count,
-		order.BalconyCount, order.BalconyType, order.BalconySash,
-		order.Price)
+	// Расчёт стоимости лоджий
+	if order.BalconyCount > 0 {
+		details.WriteString("\nЛоджии:\n")
+		var balconyPrice int
+		switch order.BalconySash {
+		case "3":
+			if order.BalconyType == "standard" {
+				balconyPrice = 1000
+			} else {
+				balconyPrice = 1500
+			}
+		case "4":
+			if order.BalconyType == "standard" {
+				balconyPrice = 1500
+			} else {
+				balconyPrice = 2000
+			}
+		case "5":
+			if order.BalconyType == "standard" {
+				balconyPrice = 2000
+			} else {
+				balconyPrice = 2500
+			}
+		case "6_7":
+			if order.BalconyType == "standard" {
+				balconyPrice = 2500
+			} else {
+				balconyPrice = 3000
+			}
+		}
+
+		balconySum = order.BalconyCount * balconyPrice
+		balconyType := "стандартные"
+		if order.BalconyType == "floor" {
+			balconyType = "до пола"
+		}
+
+		details.WriteString(fmt.Sprintf("- %d лоджии (%s, %s створки): %d * %d = %d руб.\n",
+			order.BalconyCount, balconyType, order.BalconySash,
+			order.BalconyCount, balconyPrice, balconySum))
+	}
+
+	// Итоговая стоимость
+	total := window3Sum + window4Sum + window5Sum + window6_7Sum + balconySum
+	details.WriteString(fmt.Sprintf("\nИтого стоимость: %d руб.", total))
 
 	b.updateState(chatID, "waiting_confirmation")
-	b.sendMessage(chatID, text, createConfirmationKeyboard())
+	b.sendMessage(chatID, details.String(), createConfirmationKeyboard())
 }
 
 func (b *Bot) handleOrderConfirmation(chatID int64) {
