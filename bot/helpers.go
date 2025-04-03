@@ -2,7 +2,6 @@ package bot
 
 import (
 	"github.com/eugenepelipets/window-wash-bot/models"
-	"strconv"
 )
 
 // Расчет цены на основе типа окон и этажа
@@ -55,7 +54,10 @@ func IsDigitsOnly(s string) bool {
 	if s == "" {
 		return false
 	}
-
-	_, err := strconv.Atoi(s)
-	return err == nil
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }

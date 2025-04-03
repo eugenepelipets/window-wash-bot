@@ -111,14 +111,10 @@ func createBalconySashKeyboard() tgbotapi.InlineKeyboardMarkup {
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("3-створчатые", "balcony_sash_3"),
-		),
-		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("4-створчатые", "balcony_sash_4"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("5-створчатые", "balcony_sash_5"),
-		),
-		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("6-7-створчатые", "balcony_sash_6_7"),
 		),
 		tgbotapi.NewInlineKeyboardRow(

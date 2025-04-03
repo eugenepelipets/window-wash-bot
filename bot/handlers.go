@@ -55,6 +55,7 @@ func (b *Bot) handleCallback(callback *tgbotapi.CallbackQuery) {
 			b.handleWindowDifferentCount(chatID, count)
 		}
 	case strings.HasPrefix(data, "balcony_"):
+		log.Printf("Обработка balcony callback: %s", data)
 		if count, err := strconv.Atoi(data[len("balcony_"):]); err == nil {
 			b.handleBalconyNeeded(chatID, count)
 		} else if data == "balcony_standard" || data == "balcony_floor" {
@@ -179,9 +180,14 @@ func (b *Bot) handleBalconyNeeded(chatID int64, count int) {
 	session.Order.BalconyCount = count
 
 	if count > 0 {
+		// Сбрасываем предыдущие значения
+		session.Order.BalconyType = ""
+		session.Order.BalconySash = ""
+
 		b.updateState(chatID, StateBalconyType)
 		b.sendMessage(chatID, "Окна на лоджии стандартные или до пола?", createBalconyTypeKeyboard())
 	} else {
+		// Если лоджии не нужны, сразу переходим к нику
 		b.updateState(chatID, StateTelegramNick)
 		b.sendMessage(chatID, "Введите ваш ник в Telegram (или нажмите 'Пропустить'):", createSkipKeyboard())
 	}
@@ -191,7 +197,7 @@ func (b *Bot) handleBalconyType(chatID int64, balconyType string) {
 	session := b.getSession(chatID)
 	session.Order.BalconyType = balconyType
 	b.updateState(chatID, StateBalconySash)
-	b.sendMessage(chatID, "Выберите количество створок на лоджии:", createWindowTypesKeyboard())
+	b.sendMessage(chatID, "Выберите количество створок на лоджии:", createBalconySashKeyboard())
 }
 
 func (b *Bot) handleBalconySash(chatID int64, sashType string) {
