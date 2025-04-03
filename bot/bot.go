@@ -89,7 +89,7 @@ func (b *Bot) handleStart(msg *tgbotapi.Message) {
 			tgbotapi.NewInlineKeyboardButtonData("Новый заказ", "new_order"),
 		),
 	)
-	b.sendMessage(msg.Chat.ID, "Привет! Я помогу тебе записаться на мытье окон. Нажми кнопку ниже 👇", replyMarkup)
+	b.sendMessage(msg.Chat.ID, "Привет! Чтобы записаться на мойку окон нажми на кнопку 👇", replyMarkup)
 }
 
 func (b *Bot) sendMessage(chatID int64, text string, replyMarkup ...tgbotapi.InlineKeyboardMarkup) {
@@ -100,4 +100,16 @@ func (b *Bot) sendMessage(chatID int64, text string, replyMarkup ...tgbotapi.Inl
 	if _, err := b.api.Send(msg); err != nil {
 		log.Printf("⚠️ Ошибка отправки сообщения: %v", err)
 	}
+}
+
+func (b *Bot) sendMainMenu(chatID int64) {
+	msg := tgbotapi.NewMessage(chatID, "Главное меню:")
+	msg.ReplyMarkup = createMainMenuKeyboard()
+	b.api.Send(msg)
+}
+
+func (b *Bot) sendEntranceKeyboard(chatID int64) {
+	msg := tgbotapi.NewMessage(chatID, "Выберите подъезд:")
+	msg.ReplyMarkup = createEntranceKeyboard()
+	b.api.Send(msg)
 }

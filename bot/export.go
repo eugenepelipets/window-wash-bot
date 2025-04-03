@@ -82,12 +82,15 @@ func (b *Bot) handleExport(msg *tgbotapi.Message) {
 func (b *Bot) createCSV(orders []models.Order, onlyCurrent bool) ([]byte, error) {
 	var buf bytes.Buffer
 	writer := csv.NewWriter(&buf)
+	writer.Comma = ';'
 
 	// Записываем заголовки
 	headers := []string{
-		"ID", "Дата создания", "Тип окон", "Этаж", "Квартира",
-		"Цена", "Статус", "Актуальный", "ID пользователя",
-		"Username", "Имя", "Фамилия",
+		"ID", "Дата создания", "Подъезд", "Этаж", "Квартира",
+		"Одинаковые створки", "3-створчатые", "4-створчатые",
+		"5-створчатые", "6-7-створчатые", "Лоджии", "Тип лоджии",
+		"Створки лоджии", "Телеграм ник", "Стоимость", "Статус",
+		"Актуальный", "ID пользователя", "Username", "Имя", "Фамилия",
 	}
 	if err := writer.Write(headers); err != nil {
 		return nil, err
@@ -97,11 +100,19 @@ func (b *Bot) createCSV(orders []models.Order, onlyCurrent bool) ([]byte, error)
 	for _, order := range orders {
 		record := []string{
 			strconv.FormatInt(order.ID, 10),
-			order.CreatedAt.Format("2006-01-02 15:04:05"),
-			order.CreatedAt.In(moscowLoc).Format("2006-01-02 15:04:05"), // Локальное
-			order.WindowType,
+			order.CreatedAt.In(moscowLoc).Format("2006-01-02 15:04:05"),
+			strconv.Itoa(order.Entrance),
 			strconv.Itoa(order.Floor),
 			order.Apartment,
+			strconv.FormatBool(order.WindowsSame),
+			strconv.Itoa(order.Window3Count),
+			strconv.Itoa(order.Window4Count),
+			strconv.Itoa(order.Window5Count),
+			strconv.Itoa(order.Window6_7Count),
+			strconv.Itoa(order.BalconyCount),
+			order.BalconyType,
+			order.BalconySash,
+			order.TelegramNick,
 			strconv.Itoa(order.Price),
 			order.Status,
 			strconv.FormatBool(order.IsCurrent),

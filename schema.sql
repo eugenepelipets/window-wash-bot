@@ -22,6 +22,16 @@ CREATE TABLE IF NOT EXISTS orders
     status      VARCHAR(20)              DEFAULT 'pending',
     is_current  BOOLEAN                  DEFAULT TRUE,
     created_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    entrance INTEGER NOT NULL DEFAULT 1,
+    windows_same BOOLEAN NOT NULL DEFAULT TRUE,
+    window_3_count INTEGER DEFAULT 0,
+    window_4_count INTEGER DEFAULT 0,
+    window_5_count INTEGER DEFAULT 0,
+    window_6_7_count INTEGER DEFAULT 0,
+    balcony_count INTEGER DEFAULT 0,
+    balcony_type VARCHAR(20),
+    balcony_sash VARCHAR(10),
+    telegram_nick VARCHAR(100),
     FOREIGN KEY (user_id) REFERENCES users (telegram_id)
 );
 

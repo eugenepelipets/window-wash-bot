@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"errors"
 	"log"
 	"os"
 	"time"
@@ -65,44 +64,53 @@ func (p *Postgres) SaveOrder(order models.Order) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Проверяем обязательные поля
-	if order.UserID == 0 || order.WindowType == "" || order.Apartment == "" {
-		return errors.New("не заполнены обязательные поля заказа")
-	}
-
-	// Начинаем транзакцию
 	tx, err := p.Pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 
-	// Помечаем предыдущие заказы для этой квартиры как неактуальные
+	// Помечаем предыдущие заказы как неактуальные
 	_, err = tx.Exec(ctx, `
         UPDATE orders 
         SET is_current = false 
-        WHERE user_id = $1 AND apartment = $2 AND is_current = true`,
-		order.UserID, order.Apartment)
+        WHERE apartment = $1 AND is_current = true`,
+		order.Apartment)
 	if err != nil {
 		return err
 	}
 
-	// Сохраняем новый заказ (ИСПРАВЛЕННЫЙ ЗАПРОС)
+	// Сохраняем новый заказ с явным указанием window_type
 	_, err = tx.Exec(ctx, `
-        INSERT INTO orders 
-        (user_id, window_type, floor, apartment, price, status, is_current, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, true, $7)`, // is_current=true, created_at=$7
+        INSERT INTO orders (
+            user_id, entrance, floor, apartment, windows_same,
+            window_3_count, window_4_count, window_5_count, window_6_7_count,
+            balcony_count, balcony_type, balcony_sash, telegram_nick,
+            price, status, is_current, created_at, window_type
+        ) VALUES (
+            $1, $2, $3, $4, $5,
+            $6, $7, $8, $9,
+            $10, $11, $12, $13,
+            $14, $15, true, NOW(), $16
+        )`,
 		order.UserID,
-		order.WindowType,
+		order.Entrance,
 		order.Floor,
 		order.Apartment,
+		order.WindowsSame,
+		order.Window3Count,
+		order.Window4Count,
+		order.Window5Count,
+		order.Window6_7Count,
+		order.BalconyCount,
+		order.BalconyType,
+		order.BalconySash,
+		order.TelegramNick,
 		order.Price,
 		order.Status,
-		time.Now(),
+		"custom_type", // Здесь нужно указать актуальное значение
 	)
-
 	if err != nil {
-		log.Printf("⚠️ Ошибка при сохранении заказа: %v", err) // Добавим лог
 		return err
 	}
 
@@ -119,8 +127,10 @@ func (p *Postgres) GetOrdersForExport(onlyCurrent bool) ([]models.Order, error) 
 
 	query := `
         SELECT 
-            o.id, o.window_type, o.floor, o.apartment, o.price, 
-            o.status, o.is_current, o.created_at,
+            o.id, o.entrance, o.floor, o.apartment, o.windows_same,
+            o.window_3_count, o.window_4_count, o.window_5_count, o.window_6_7_count,
+            o.balcony_count, o.balcony_type, o.balcony_sash, o.telegram_nick,
+            o.price, o.status, o.is_current, o.created_at,
             u.telegram_id, u.username, u.first_name, u.last_name
         FROM orders o
         JOIN users u ON o.user_id = u.telegram_id
@@ -140,9 +150,18 @@ func (p *Postgres) GetOrdersForExport(onlyCurrent bool) ([]models.Order, error) 
 		var user models.User
 		err := rows.Scan(
 			&order.ID,
-			&order.WindowType,
+			&order.Entrance,
 			&order.Floor,
 			&order.Apartment,
+			&order.WindowsSame,
+			&order.Window3Count,
+			&order.Window4Count,
+			&order.Window5Count,
+			&order.Window6_7Count,
+			&order.BalconyCount,
+			&order.BalconyType,
+			&order.BalconySash,
+			&order.TelegramNick,
 			&order.Price,
 			&order.Status,
 			&order.IsCurrent,
