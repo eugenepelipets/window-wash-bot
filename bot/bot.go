@@ -1,8 +1,10 @@
 package bot
 
 import (
+	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/eugenepelipets/window-wash-bot/models"
@@ -116,5 +118,23 @@ func (b *Bot) sendMainMenu(chatID int64) {
 func (b *Bot) sendEntranceKeyboard(chatID int64) {
 	msg := tgbotapi.NewMessage(chatID, "Выберите подъезд:")
 	msg.ReplyMarkup = createEntranceKeyboard()
+	b.api.Send(msg)
+}
+
+func (b *Bot) notifyAdminAboutDuplicate(chatID int64, order models.Order) {
+	adminID, _ := strconv.ParseInt(os.Getenv("ADMIN_TELEGRAM_ID"), 10, 64)
+	if adminID == 0 {
+		return
+	}
+
+	msgText := fmt.Sprintf(
+		"⚠️ Обнаружен дублирующий заказ!\n\n"+
+			"Подъезд: %d\nЭтаж: %d\nКвартира: %s\n"+
+			"Пользователь: @%s (%d)\n\n"+
+			"Первый заказ будет подтвержден, этот - на уточнении.",
+		order.Entrance, order.Floor, order.Apartment,
+		order.User.UserName, order.User.TelegramID)
+
+	msg := tgbotapi.NewMessage(adminID, msgText)
 	b.api.Send(msg)
 }

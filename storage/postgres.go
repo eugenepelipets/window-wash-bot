@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"time"
@@ -61,26 +62,62 @@ func (p *Postgres) SaveUser(user models.User) error {
 
 // Сохранение заказа
 func (p *Postgres) SaveOrder(order models.Order) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	tx, err := p.Pool.Begin(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("не удалось начать транзакцию: %v", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err != nil {
+			tx.Rollback(ctx)
+		}
+	}()
 
-	// Помечаем предыдущие заказы как неактуальные
-	_, err = tx.Exec(ctx, `
-        UPDATE orders 
-        SET is_current = false 
-        WHERE apartment = $1 AND is_current = true`,
-		order.Apartment)
-	if err != nil {
-		return err
+	// Определяем тип окон для сохранения в БД
+	windowType := "different"
+	if order.WindowsSame {
+		if order.Window3Count > 0 {
+			windowType = "3_same"
+		} else if order.Window4Count > 0 {
+			windowType = "4_same"
+		} else if order.Window5Count > 0 {
+			windowType = "5_same"
+		} else if order.Window6_7Count > 0 {
+			windowType = "6_7_same"
+		}
 	}
 
-	// Сохраняем новый заказ с явным указанием window_type
+	// Проверяем существующие заказы
+	var existingOrderID int64
+	err = tx.QueryRow(ctx, `
+        SELECT id FROM orders 
+        WHERE entrance = $1 AND floor = $2 AND apartment = $3 
+        AND is_current = true AND status = 'confirmed'
+        LIMIT 1`,
+		order.Entrance, order.Floor, order.Apartment).Scan(&existingOrderID)
+
+	orderExists := err == nil
+
+	if orderExists {
+		order.Status = "needs_clarification"
+		order.IsCurrent = true
+	} else {
+		order.Status = "confirmed"
+		order.IsCurrent = true
+
+		_, err = tx.Exec(ctx, `
+            UPDATE orders 
+            SET is_current = false 
+            WHERE entrance = $1 AND floor = $2 AND apartment = $3 AND is_current = true`,
+			order.Entrance, order.Floor, order.Apartment)
+		if err != nil {
+			return fmt.Errorf("ошибка деактивации предыдущих заказов: %v", err)
+		}
+	}
+
+	// Сохраняем заказ с явным указанием window_type
 	_, err = tx.Exec(ctx, `
         INSERT INTO orders (
             user_id, entrance, floor, apartment, windows_same,
@@ -88,10 +125,8 @@ func (p *Postgres) SaveOrder(order models.Order) error {
             balcony_count, balcony_type, balcony_sash, telegram_nick,
             price, status, is_current, created_at, window_type
         ) VALUES (
-            $1, $2, $3, $4, $5,
-            $6, $7, $8, $9,
-            $10, $11, $12, $13,
-            $14, $15, true, NOW(), $16
+            $1, $2, $3, $4, $5, $6, $7, $8, $9,
+            $10, $11, $12, $13, $14, $15, $16, NOW(), $17
         )`,
 		order.UserID,
 		order.Entrance,
@@ -108,13 +143,18 @@ func (p *Postgres) SaveOrder(order models.Order) error {
 		order.TelegramNick,
 		order.Price,
 		order.Status,
-		"custom_type", // Здесь нужно указать актуальное значение
-	)
+		order.IsCurrent,
+		windowType)
+
 	if err != nil {
-		return err
+		return fmt.Errorf("ошибка сохранения заказа: %v", err)
 	}
 
-	return tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("ошибка коммита транзакции: %v", err)
+	}
+
+	return nil
 }
 
 // storage/postgres.go
@@ -179,4 +219,25 @@ func (p *Postgres) GetOrdersForExport(onlyCurrent bool) ([]models.Order, error) 
 	}
 
 	return orders, nil
+}
+
+// CheckExistingOrder проверяет наличие активных заказов для указанной квартиры
+func (p *Postgres) CheckExistingOrder(entrance int, floor int, apartment string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var exists bool
+	err := p.Pool.QueryRow(ctx, `
+        SELECT EXISTS(
+            SELECT 1 FROM orders 
+            WHERE entrance = $1 AND floor = $2 AND apartment = $3 
+            AND is_current = true AND status = 'confirmed'
+        )`,
+		entrance, floor, apartment).Scan(&exists)
+
+	if err != nil {
+		return false, fmt.Errorf("ошибка проверки заказов: %v", err)
+	}
+
+	return exists, nil
 }

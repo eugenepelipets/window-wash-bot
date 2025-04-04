@@ -301,7 +301,24 @@ func (b *Bot) showOrderConfirmation(chatID int64, order models.Order) {
 func (b *Bot) handleOrderConfirmation(chatID int64) {
 	session := b.getSession(chatID)
 	order := session.Order
-	order.Status = "confirmed"
+
+	// Проверяем существующие заказы перед сохранением
+	exists, err := b.db.CheckExistingOrder(order.Entrance, order.Floor, order.Apartment)
+	if err != nil {
+		b.sendMessage(chatID, "Ошибка проверки заказов. Попробуйте позже.")
+		return
+	}
+
+	if exists {
+		order.Status = "needs_clarification"
+		b.notifyAdminAboutDuplicate(chatID, order)
+		b.sendMessage(chatID,
+			"Похоже, кто-то уже создал заявку для этой квартиры.\n"+
+				"Ваш заказ поставлен на уточнение. Администратор свяжется с вами.")
+	} else {
+		order.Status = "confirmed"
+		b.sendMessage(chatID, "Ваш заказ подтвержден! Ожидайте мастера.")
+	}
 
 	if err := b.db.SaveOrder(order); err != nil {
 		b.sendMessage(chatID, "Ошибка сохранения заказа. Пожалуйста, попробуйте позже.")
@@ -310,8 +327,6 @@ func (b *Bot) handleOrderConfirmation(chatID int64) {
 
 	delete(userSessions, chatID)
 	delete(userState, chatID)
-
-	b.sendMessage(chatID, "Ваш заказ подтвержден! Ожидайте мастера.", createMainMenuKeyboard())
 }
 
 func (b *Bot) handleOrderCancellation(chatID int64) {
